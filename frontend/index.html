@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DOMINIONS — Multi-Minion AI</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- highlight.js dark theme (matches cyberpunk palette) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/tokyo-night-dark.min.css" />
+</head>
+<body>
+
+  <!-- ▶ Header bar -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-name">DOMINIONS</span>
+      <span class="brand-sub">— by VWHYBE</span>
+    </div>
+    <nav class="header-nav" aria-label="Main navigation">
+      <a href="#" class="nav-link" data-view="minions-list" id="nav-minions-list">MINIONS</a>
+      <a href="#" class="nav-link" data-view="create-minion" id="nav-create-minion">CREATE</a>
+      <a href="#" class="nav-link" data-view="task" id="nav-task">TASK</a>
+      <a href="#" class="nav-link" data-view="pipeline" id="nav-pipeline">PIPELINE<span class="nav-run-dot" id="nav-pipeline-dot"></span></a>
+    </nav>
+    <div class="budget-selector" id="budget-selector" aria-label="Budget preset selector">
+      <span class="budget-label">BUDGET</span>
+      <div class="budget-btns" role="group" aria-label="Budget tiers">
+        <button class="budget-btn" data-budget="free" aria-pressed="false">FREE</button>
+        <button class="budget-btn" data-budget="min"  aria-pressed="false">MIN</button>
+        <button class="budget-btn" data-budget="mid"  aria-pressed="false">MID</button>
+        <button class="budget-btn" data-budget="max"  aria-pressed="false">MAX</button>
+      </div>
+    </div>
+    <div class="max-tokens-selector" id="max-tokens-selector" aria-label="Max completion tokens">
+      <label for="max-tokens-input" class="max-tokens-label">MAX TOKENS</label>
+      <input type="number" id="max-tokens-input" class="max-tokens-input" min="256" max="128000" step="256" value="4096" aria-describedby="max-tokens-hint" />
+      <span id="max-tokens-hint" class="sr-only">Max completion tokens per agent call (256–128000)</span>
+    </div>
+    <div class="header-meta">
+      <span class="header-agents">
+        <span class="dot-green">●</span>
+        <span id="agents-count-num">0</span> AGENTS
+      </span>
+      <span class="header-time" id="header-time">--:--:-- UTC</span>
+    </div>
+  </header>
+
+  <!-- ▶ Ticker / status strip -->
+  <div class="ticker-bar" role="status" aria-live="polite">
+    <span class="ticker-label">▶ SYS</span>
+    <span class="ticker-text" id="ticker-text">SYSTEM ONLINE — PIPELINE IDLE — OPENROUTER CONNECTED</span>
+  </div>
+
+  <!-- ▶ Main views -->
+  <main class="main">
+
+    <!-- ═══ MINIONS LIST ═══ -->
+    <section id="view-minions-list" class="view" hidden>
+      <div class="view-bar">
+        <div class="view-bar-left">
+          <span class="view-bar-icon">⚡</span>
+          <h2 class="view-bar-title">MINION REGISTRY</h2>
+        </div>
+        <span class="live-badge">● LIVE</span>
+      </div>
+      <div id="minions-grid" class="minions-grid" aria-label="Minion cards"></div>
+    </section>
+
+    <!-- ═══ CREATE MINION ═══ -->
+    <section id="view-create-minion" class="view" hidden>
+      <div class="view-bar">
+        <div class="view-bar-left">
+          <span class="view-bar-icon">+</span>
+          <h2 class="view-bar-title">CREATE AGENT</h2>
+        </div>
+      </div>
+      <div class="panel create-panel">
+        <div class="panel-header">
+          <span class="panel-title">NEW AGENT CONFIGURATION</span>
+          <span class="panel-hint">DEPLOY A NEW MINION TO THE PIPELINE</span>
+        </div>
+        <form id="create-minion-form" class="create-minion-form" aria-label="Create minion form">
+          <div class="form-row">
+            <label for="create-name" class="form-label">AGENT NAME</label>
+            <input type="text" id="create-name" class="form-input" placeholder="e.g. ANALYZER" required autocomplete="off" />
+          </div>
+          <div class="form-row">
+            <label for="create-description" class="form-label">DESCRIPTION <span class="form-optional">[OPTIONAL]</span></label>
+            <input type="text" id="create-description" class="form-input" placeholder="Brief description of this agent's role" autocomplete="off" />
+          </div>
+          <div class="form-row">
+            <label for="create-system-prompt" class="form-label">SYSTEM PROMPT</label>
+            <textarea id="create-system-prompt" class="form-input form-textarea" rows="6" placeholder="Define the agent's behavior, role, and responsibilities..." required></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">▶ DEPLOY AGENT</button>
+          </div>
+        </form>
+        <p id="create-minion-status" class="form-status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <!-- ═══ TASK ═══ -->
+    <section id="view-task" class="view view-task" hidden>
+      <div class="task-layout">
+
+        <!-- Sidebar: agents -->
+        <aside class="task-sidebar">
+          <div class="panel-header sidebar-header">
+            <span class="panel-title">ACTIVE AGENTS</span>
+            <span class="live-badge">● LIVE</span>
+          </div>
+          <div id="task-agent-list" class="task-agent-list" role="list"></div>
+          <div class="sidebar-footer">
+            <button type="button" id="clear-memory-btn" class="btn btn-ghost btn-small" aria-label="Clear memory">
+              ◻ CLEAR MEMORY
+            </button>
+          </div>
+        </aside>
+
+        <!-- Main: result + prompt -->
+        <div class="task-main">
+
+          <div class="task-result-panel panel">
+            <div class="panel-header">
+              <span class="panel-title" id="result-panel-title">OUTPUT STREAM</span>
+              <div class="panel-header-actions">
+                <button type="button" id="copy-result-btn" class="btn btn-ghost btn-small" aria-label="Copy markdown to clipboard" title="Copy markdown">
+                  ◻ COPY
+                </button>
+                <span class="result-status-badge" id="result-status-badge" data-status="idle">● IDLE</span>
+              </div>
+            </div>
+            <div class="task-result-body">
+              <p class="task-result-placeholder" id="task-result-placeholder">
+                SELECT AN AGENT AND EXECUTE A TASK TO VIEW OUTPUT
+              </p>
+              <div id="task-result-content" class="task-result-content" hidden></div>
+            </div>
+          </div>
+
+          <div class="task-prompt-panel panel">
+            <div class="panel-header">
+              <span class="panel-title">TASK DIRECTIVE</span>
+              <span class="panel-hint">CTRL+ENTER TO EXECUTE</span>
+            </div>
+            <div class="task-prompt-body">
+              <label for="task-input" class="sr-only">Task prompt</label>
+              <textarea id="task-input" class="task-prompt-input" rows="3" placeholder="Enter task directive for the agent pipeline..."></textarea>
+              <div class="task-actions">
+                <button type="button" id="run-btn" class="btn btn-primary">▶ EXECUTE PIPELINE</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ PIPELINE LIVE ═══ -->
+    <section id="view-pipeline" class="view" hidden>
+      <div class="view-bar">
+        <div class="view-bar-left">
+          <span class="view-bar-icon">◉</span>
+          <h2 class="view-bar-title">PIPELINE — LIVE VIEW</h2>
+        </div>
+        <span class="pipeline-global-status" id="pipeline-global-status" data-status="idle">● IDLE</span>
+      </div>
+      <div class="pipeline-task-banner" id="pipeline-task-banner" hidden>
+        <span class="pipeline-task-label">TASK</span>
+        <span class="pipeline-task-text" id="pipeline-task-text"></span>
+      </div>
+      <div id="pipeline-lanes" class="pipeline-lanes" aria-label="Agent pipeline lanes" aria-live="polite"></div>
+    </section>
+
+  </main>
+
+  <div id="status" class="global-status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/13.0.3/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

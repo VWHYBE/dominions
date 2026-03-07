@@ -1,0 +1,32 @@
+{
+  "name": "dominions",
+  "version": "0.1.0",
+  "description": "Multi-Minion AI System - dynamic minions + OpenRouter + Web UI",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "mcp": "node mcp-server.js",
+    "check:ollama": "node scripts/check-ollama.js"
+  },
+  "keywords": [
+    "multi-agent",
+    "minion",
+    "planner",
+    "coder",
+    "reviewer",
+    "memory"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@openrouter/sdk": "^0.9.11",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "playwright": "^1.58.2"
+  }
+}
