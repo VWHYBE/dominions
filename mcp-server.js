@@ -208,6 +208,164 @@ const TOOLS = [
       },
     },
   },
+
+  // ─── Browser Relay tools ───────────────────────────────────────────────────
+  {
+    name: "browser_relay_status",
+    description:
+      "Check if the browser relay server is running and if the Chrome extension is attached to a tab. " +
+      "Always call this first before using other browser_relay_* tools.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_relay_navigate",
+    description: "Navigate the attached Chrome tab to a URL. Waits ~1.5s for the page to start loading.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Full URL to navigate to (must start with http:// or https://)." },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "browser_relay_snapshot",
+    description: "Get the full HTML source of the current page in the attached tab.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_relay_text",
+    description: "Get the visible text content of the current page (no HTML tags).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_relay_click",
+    description: "Click an element in the attached tab by CSS selector.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "CSS selector of the element to click." },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "browser_relay_type",
+    description:
+      "Type text into an element in the attached tab. Optionally focus it by selector first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text:     { type: "string", description: "Text to type." },
+        selector: { type: "string", description: "Optional CSS selector to focus before typing." },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "browser_relay_scroll",
+    description: "Scroll the page by pixels or scroll an element into view.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x:        { type: "number", description: "Horizontal pixels to scroll (default 0)." },
+        y:        { type: "number", description: "Vertical pixels to scroll (default 0)." },
+        selector: { type: "string", description: "Optional CSS selector to scroll into view." },
+      },
+    },
+  },
+  {
+    name: "browser_relay_screenshot",
+    description: "Take a screenshot of the attached tab. Returns a base64-encoded JPEG data URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        format:  { type: "string", enum: ["jpeg", "png"], description: "Image format (default: jpeg)." },
+        quality: { type: "number", description: "JPEG quality 1–100 (default: 80).", minimum: 1, maximum: 100 },
+      },
+    },
+  },
+  {
+    name: "browser_relay_evaluate",
+    description: "Evaluate arbitrary JavaScript in the attached tab and return the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expression:   { type: "string", description: "JavaScript expression to evaluate." },
+        awaitPromise: { type: "boolean", description: "Await the returned Promise (default false)." },
+      },
+      required: ["expression"],
+    },
+  },
+  {
+    name: "browser_relay_get_url",
+    description: "Get the current URL of the attached tab.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_relay_get_title",
+    description: "Get the page title of the attached tab.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // ─── Browser Task (natural language) ───────────────────────────────────────
+  {
+    name: "browser_task",
+    description:
+      "Run a natural-language browser task in the attached Chrome tab. " +
+      "The LLM interprets your command and drives the browser (navigate, click, type, scroll) until the task is done or max steps. " +
+      "Example: 'Buka tiket.com, cari kereta Jakarta–Bandung tanggal 5 Maret 2026' or 'Klik tombol Login lalu isi email dan password'. " +
+      "Requires: relay running (npm run relay), extension attached to a tab, and LLM configured.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        perintah: {
+          type: "string",
+          description: "The task in natural language (e.g. 'Buka halaman X', 'Klik tombol Y', 'Isi form dengan Z').",
+        },
+        maxSteps: {
+          type: "number",
+          description: "Maximum number of automation steps (default 15).",
+          minimum: 1,
+          maximum: 30,
+        },
+        simulateTime: {
+          type: "string",
+          description: "Optional. Simulate current time for ticket war, e.g. '15:51' or '3.52' (WIB).",
+        },
+      },
+      required: ["perintah"],
+    },
+  },
+  {
+    name: "browser_task_cdp",
+    description:
+      "Run a natural-language browser task using Playwright over full CDP proxy — more robust than browser_task. " +
+      "Playwright handles navigation waits, element visibility, and proper fill/click interactions automatically. " +
+      "Best for complex tasks: hotel/train search with date pickers, form filling, multi-step flows. " +
+      "Requires: relay running (npm run relay), extension attached and CDP mode active (/extension-cdp connected). " +
+      "Example: 'Cari hotel di Bandung tanggal 25 Maret 2025 di tiket.com'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        perintah: {
+          type: "string",
+          description: "The task in natural language.",
+        },
+        maxSteps: {
+          type: "number",
+          description: "Maximum number of automation steps (default 20).",
+          minimum: 1,
+          maximum: 40,
+        },
+        simulateTime: {
+          type: "string",
+          description: "Optional. Simulate current time for ticket war, e.g. '15:51' or '3.52' (WIB).",
+        },
+      },
+      required: ["perintah"],
+    },
+  },
 ];
 
 // ─── Tool handlers ────────────────────────────────────────────────────────────
@@ -402,6 +560,131 @@ async function handleTool(name, args) {
       if (!data.ok) return err(data.error || "Failed to update config");
       const c = data.config;
       return ok("Config updated — Budget: " + c.budget + ", Max tokens: " + c.maxTokens);
+    }
+
+    // ─── Browser Relay ───────────────────────────────────────────────────────
+
+    case "browser_relay_status": {
+      const data = await api("GET", "/api/browser/status");
+      if (!data.ok && !("extensionConnected" in data)) return err(data.error || "Relay unreachable");
+      return ok(
+        "Relay server:   " + (data.ok ? "RUNNING" : "NOT REACHABLE") + "\n" +
+        "Extension:      " + (data.extensionConnected ? "CONNECTED (tab attached)" : "NOT CONNECTED") + "\n" +
+        (data.error ? "Error: " + data.error : "")
+      );
+    }
+
+    case "browser_relay_navigate": {
+      const { url } = args || {};
+      if (!url) return err("url is required");
+      const data = await api("POST", "/api/browser/action", { action: "navigate", params: { url } });
+      if (!data.ok) return err(data.error || "Navigate failed");
+      return ok("Navigated to: " + (data.data?.url || url));
+    }
+
+    case "browser_relay_snapshot": {
+      const data = await api("POST", "/api/browser/action", { action: "getContent" });
+      if (!data.ok) return err(data.error || "getContent failed");
+      const html = data.data?.html || "";
+      const truncated = html.length > 50000;
+      return ok((truncated ? html.slice(0, 50000) + "\n\n[…truncated to 50 000 chars]" : html));
+    }
+
+    case "browser_relay_text": {
+      const data = await api("POST", "/api/browser/action", { action: "getText" });
+      if (!data.ok) return err(data.error || "getText failed");
+      const text = data.data?.text || "";
+      const truncated = text.length > 30000;
+      return ok(truncated ? text.slice(0, 30000) + "\n\n[…truncated]" : text);
+    }
+
+    case "browser_relay_click": {
+      const { selector } = args || {};
+      if (!selector) return err("selector is required");
+      const data = await api("POST", "/api/browser/action", { action: "click", params: { selector } });
+      if (!data.ok) return err(data.error || "Click failed");
+      return ok("Clicked: " + selector + " at (" + data.data?.x + ", " + data.data?.y + ")");
+    }
+
+    case "browser_relay_type": {
+      const { text, selector } = args || {};
+      if (text === undefined) return err("text is required");
+      const data = await api("POST", "/api/browser/action", { action: "type", params: { text, selector } });
+      if (!data.ok) return err(data.error || "Type failed");
+      return ok("Typed: " + String(text).slice(0, 80) + (text.length > 80 ? "…" : ""));
+    }
+
+    case "browser_relay_scroll": {
+      const { x = 0, y = 0, selector } = args || {};
+      const data = await api("POST", "/api/browser/action", { action: "scroll", params: { x, y, selector } });
+      if (!data.ok) return err(data.error || "Scroll failed");
+      return ok(selector ? "Scrolled to: " + selector : "Scrolled by (" + x + ", " + y + ")");
+    }
+
+    case "browser_relay_screenshot": {
+      const { format = "jpeg", quality = 80 } = args || {};
+      const data = await api("POST", "/api/browser/action", { action: "screenshot", params: { format, quality } });
+      if (!data.ok) return err(data.error || "Screenshot failed");
+      return ok("Screenshot taken.\ndata URL (base64): " + (data.data?.dataUrl || "").slice(0, 100) + "…");
+    }
+
+    case "browser_relay_evaluate": {
+      const { expression, awaitPromise = false } = args || {};
+      if (!expression) return err("expression is required");
+      const data = await api("POST", "/api/browser/action", { action: "evaluate", params: { expression, awaitPromise } });
+      if (!data.ok) return err(data.error || "Evaluate failed");
+      return ok("Result: " + JSON.stringify(data.data?.result));
+    }
+
+    case "browser_relay_get_url": {
+      const data = await api("POST", "/api/browser/action", { action: "getUrl" });
+      if (!data.ok) return err(data.error || "getUrl failed");
+      return ok(data.data?.url || "");
+    }
+
+    case "browser_relay_get_title": {
+      const data = await api("POST", "/api/browser/action", { action: "getTitle" });
+      if (!data.ok) return err(data.error || "getTitle failed");
+      return ok(data.data?.title || "");
+    }
+
+    case "browser_task": {
+      const { perintah, maxSteps, simulateTime } = args || {};
+      if (!perintah || typeof perintah !== "string" || !perintah.trim()) {
+        return err("perintah is required (non-empty string)");
+      }
+      const data = await api("POST", "/api/browser/task", {
+        perintah: perintah.trim(),
+        ...(typeof maxSteps === "number" && maxSteps >= 1 && maxSteps <= 30 ? { maxSteps } : {}),
+        ...(simulateTime && typeof simulateTime === "string" && simulateTime.trim() ? { simulateTime: simulateTime.trim() } : {}),
+      });
+      if (!data.ok) {
+        const stepLog = data.steps?.length
+          ? "\nSteps: " + data.steps.map((s) => `${s.step}. ${s.action} ${JSON.stringify(s.params || {})} → ${s.result || ""}`).join("; ")
+          : "";
+        return err((data.error || "Task failed") + stepLog);
+      }
+      const stepLog = data.steps?.length
+        ? "\nSteps executed: " + data.steps.map((s) => `${s.step}. ${s.action}`).join(", ")
+        : "";
+      return ok((data.summary || "Done.") + stepLog);
+    }
+
+    case "browser_task_cdp": {
+      const { perintah, maxSteps, simulateTime } = args || {};
+      if (!perintah || typeof perintah !== "string" || !perintah.trim()) {
+        return err("perintah is required (non-empty string)");
+      }
+      const data = await api("POST", "/api/browser/cdp-task", {
+        perintah: perintah.trim(),
+        ...(typeof maxSteps === "number" && maxSteps >= 1 && maxSteps <= 40 ? { maxSteps } : {}),
+        ...(simulateTime && typeof simulateTime === "string" && simulateTime.trim() ? { simulateTime: simulateTime.trim() } : {}),
+      });
+      if (!data.ok) return err(data.error || "CDP task failed");
+      const stepLog = data.steps?.length
+        ? "\nSteps executed:\n" + data.steps.map((s) => `  ${s.step}. ${s.action}${s.params ? " " + JSON.stringify(s.params) : ""}${s.error ? " → ERROR: " + s.error : ""}${s.summary ? " → " + s.summary : ""}`).join("\n")
+        : "";
+      return ok((data.finalSummary || "Done.") + stepLog);
     }
 
     default:

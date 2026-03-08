@@ -32,6 +32,7 @@ let selectedAgentId = null;
 let lastResults = null;
 // Live pipeline state from SSE
 let currentRunId = null;
+let currentRunSource = null; // "task" | "mcp" — determines which view to update
 let agentStatuses = {}; // id -> "pending" | "running" | "done"
 
 // ─── Clock ───
@@ -700,23 +701,35 @@ function connectSSE() {
   const es = new EventSource("/api/stream");
 
   es.addEventListener("pipeline:start", (e) => {
-    const { runId, task, total } = JSON.parse(e.data);
+    const { runId, task, total, source } = JSON.parse(e.data);
     currentRunId = runId;
+    currentRunSource = source || "task";
+
+    if (currentRunSource === "mcp") {
+      // MCP run: update only Pipeline view
+      lastResults = {};
+      agentStatuses = {};
+      getActiveMinions().forEach((m) => { agentStatuses[m.id] = "pending"; });
+      if (pipelineTaskBanner) pipelineTaskBanner.hidden = false;
+      if (pipelineTaskText)   pipelineTaskText.textContent = task;
+      setPipelineGlobalStatus("running", "◉ RUNNING");
+      setPipelineRunDot(true);
+      renderPipelineLanes();
+      showView("pipeline");
+      setTicker("PIPELINE (MCP) — TASK: " + task.slice(0, 80) + (task.length > 80 ? "…" : ""));
+      return;
+    }
+
+    // Task run: update Task view (and keep Pipeline lanes in sync)
     lastResults = {};
     agentStatuses = {};
     getActiveMinions().forEach((m) => { agentStatuses[m.id] = "pending"; });
-
-    // Reset pipeline live view
     if (pipelineTaskBanner) pipelineTaskBanner.hidden = false;
     if (pipelineTaskText)   pipelineTaskText.textContent = task;
     setPipelineGlobalStatus("running", "◉ RUNNING");
     setPipelineRunDot(true);
     renderPipelineLanes();
-
-    // Auto-switch to pipeline view so user sees live progress
-    showView("pipeline");
-
-    // Keep task tab state in sync too
+    showView("task");
     renderTaskAgentList();
     selectedAgentId = null;
     if (resultPanelTitle) resultPanelTitle.textContent = "OUTPUT STREAM";
@@ -729,14 +742,20 @@ function connectSSE() {
   });
 
   es.addEventListener("agent:start", (e) => {
-    const { id, name, index, total } = JSON.parse(e.data);
-    updateAgentStatus(id, "running");
+    const { id, name, index, total, source } = JSON.parse(e.data);
     updatePipelineLaneStatus(id, "running");
+    if (currentRunSource === "mcp") {
+      setTicker(
+        "RUNNING AGENT " + (index + 1) + "/" + total + " — " + name.toUpperCase() +
+        " — AWAITING RESPONSE…"
+      );
+      return;
+    }
+    updateAgentStatus(id, "running");
     setTicker(
       "RUNNING AGENT " + (index + 1) + "/" + total + " — " + name.toUpperCase() +
       " — AWAITING RESPONSE…"
     );
-    // Auto-select in task tab
     if (!selectedAgentId || selectedAgentId === id) {
       selectedAgentId = id;
       taskAgentList.querySelectorAll(".task-agent-btn").forEach((b) => {
@@ -761,7 +780,8 @@ function connectSSE() {
     const done = index + 1;
     setTicker("AGENT " + done + "/" + total + " DONE — " + name.toUpperCase() + " — " + (total - done) + " REMAINING");
 
-    // If this agent is currently selected, render its output now
+    if (currentRunSource === "mcp") return;
+
     if (selectedAgentId === id || !selectedAgentId) {
       selectedAgentId = id;
       taskAgentList.querySelectorAll(".task-agent-btn").forEach((b) => {
@@ -776,12 +796,26 @@ function connectSSE() {
   });
 
   es.addEventListener("pipeline:done", (e) => {
-    const { task, results, completedAt } = JSON.parse(e.data);
+    const { task, results, completedAt, source } = JSON.parse(e.data);
     lastResults = results || {};
-    applyResultsToUI(lastResults);
     const count = Object.keys(lastResults).length;
     setPipelineGlobalStatus("done", "● DONE — " + count + " AGENT" + (count !== 1 ? "S" : ""));
     setPipelineRunDot(false);
+
+    if (currentRunSource === "mcp") {
+      const display = (s) => (s != null && String(s).trim() !== "" ? String(s) : "(No output)");
+      for (const [id, output] of Object.entries(lastResults)) {
+        updatePipelineLaneOutput(id, display(output));
+      }
+      setTicker(
+        "PIPELINE (MCP) COMPLETE — " + count + " AGENTS — " +
+        task.slice(0, 70) + (task.length > 70 ? "…" : "")
+      );
+      currentRunSource = null;
+      return;
+    }
+
+    applyResultsToUI(lastResults);
     setStatus("PIPELINE COMPLETE — " + count + " AGENT" + (count !== 1 ? "S" : "") + " PROCESSED.");
     setTicker(
       "PIPELINE COMPLETE — " + count + " AGENTS — TASK: " +
@@ -789,7 +823,7 @@ function connectSSE() {
     );
     setResultStatus("done");
     runBtn.disabled = false;
-    // Auto-show first agent if none selected
+    currentRunSource = null;
     const activeList = getActiveMinions();
     if (!selectedAgentId && activeList.length > 0) {
       selectedAgentId = activeList[0].id;
@@ -804,15 +838,19 @@ function connectSSE() {
   });
 
   es.addEventListener("pipeline:error", (e) => {
-    const { error } = JSON.parse(e.data);
+    const { error, source } = JSON.parse(e.data);
     setPipelineGlobalStatus("error", "✕ ERROR");
     setPipelineRunDot(false);
-    setStatus("PIPELINE ERROR: " + error, true);
-    setResultStatus("error");
-    runBtn.disabled = false;
-    taskResultPlaceholder.textContent = "PIPELINE ERROR — " + error;
-    taskResultPlaceholder.hidden = false;
-    taskResultContent.hidden = true;
+    if (currentRunSource === "task") {
+      setStatus("PIPELINE ERROR: " + error, true);
+      setResultStatus("error");
+      runBtn.disabled = false;
+      taskResultPlaceholder.textContent = "PIPELINE ERROR — " + error;
+      taskResultPlaceholder.hidden = false;
+      taskResultContent.hidden = true;
+    }
+    setTicker(currentRunSource === "mcp" ? "PIPELINE (MCP) ERROR — " + error : "PIPELINE ERROR — " + error);
+    currentRunSource = null;
   });
 
   es.onerror = () => {

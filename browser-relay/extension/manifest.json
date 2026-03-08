@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Dominions Browser Relay",
+  "version": "1.0.0",
+  "description": "Relay bridge between Dominions AI agent and your active Chrome tab via CDP.",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "activeTab",
+    "storage",
+    "alarms",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Dominions Relay"
+  }
+}

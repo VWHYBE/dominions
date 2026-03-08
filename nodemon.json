@@ -1,0 +1,11 @@
+{
+  "watch": ["server.js", "services/", "mcp-server.js", "browser-relay/server.js"],
+  "ext": "js,json",
+  "ignore": [
+    "node_modules/",
+    "browser-relay/extension/",
+    "last-results.json",
+    "*.log"
+  ],
+  "delay": 500
+}

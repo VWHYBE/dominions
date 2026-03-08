@@ -1,5 +1,16 @@
 import "dotenv/config";
 import express from "express";
+
+// Prevent Playwright's internal CDP assertion errors from crashing the server.
+// These surface as uncaught exceptions when the CDP relay forwards events that
+// contain session IDs Playwright didn't create (e.g. extension sub-sessions).
+process.on("uncaughtException", (err) => {
+  console.error("[server] Uncaught exception (suppressed crash):", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error("[server] Unhandled rejection (suppressed crash):", msg);
+});
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -19,6 +30,9 @@ import { getProviderName, isConfigured as llmConfigured } from "./llm.js";
 import { scrapePage } from "./services/pageScraper.js";
 import { extractSections } from "./services/sectionExtractor.js";
 import { executeHandoff } from "./services/executor.js";
+import * as browserRelay from "./services/browserRelayClient.js";
+import { runTask as runBrowserTask } from "./services/browserTaskRunner.js";
+import { runCdpTask } from "./services/browserCdpRunner.js";
 
 // ─── SSE client registry ───────────────────────────────────────────────────
 const sseClients = new Set();
@@ -33,11 +47,11 @@ function broadcast(event, data) {
   }
 }
 
-pipelineEvents.on("pipeline:start",  (d) => broadcast("pipeline:start",  d));
-pipelineEvents.on("agent:start",     (d) => broadcast("agent:start",     d));
-pipelineEvents.on("agent:result",    (d) => broadcast("agent:result",    d));
-pipelineEvents.on("pipeline:done",   (d) => broadcast("pipeline:done",   d));
-pipelineEvents.on("pipeline:error",  (d) => broadcast("pipeline:error",  d));
+pipelineEvents.on("pipeline:start",  (d) => broadcast("pipeline:start",  { ...d, source: "task" }));
+pipelineEvents.on("agent:start",     (d) => broadcast("agent:start",     { ...d, source: "task" }));
+pipelineEvents.on("agent:result",    (d) => broadcast("agent:result",    { ...d, source: "task" }));
+pipelineEvents.on("pipeline:done",   (d) => broadcast("pipeline:done",   { ...d, source: "task" }));
+pipelineEvents.on("pipeline:error",   (d) => broadcast("pipeline:error",  { ...d, source: "task" }));
 
 const VALID_BUDGETS = ["free", "min", "mid", "max"];
 const MIN_MAX_TOKENS = 256;
@@ -298,7 +312,7 @@ app.post("/api/pipeline/mcp/start", (req, res) => {
     return res.status(400).json({ error: "runId and task are required" });
   }
   mcpRuns.set(runId, { task: task.trim(), total: total || 0, results: {} });
-  broadcast("pipeline:start", { runId, task: task.trim(), total: total || 0 });
+  broadcast("pipeline:start", { runId, task: task.trim(), total: total || 0, source: "mcp" });
   return res.json({ ok: true });
 });
 
@@ -318,6 +332,7 @@ app.post("/api/pipeline/mcp/result", (req, res) => {
     output: output || "",
     index: index ?? 0,
     total: total ?? run.total,
+    source: "mcp",
   });
   return res.json({ ok: true });
 });
@@ -332,7 +347,7 @@ app.post("/api/pipeline/mcp/done", async (req, res) => {
   try {
     const completedAt = new Date().toISOString();
     await saveResults(run.task, run.results);
-    broadcast("pipeline:done", { runId, task: run.task, results: run.results, completedAt });
+    broadcast("pipeline:done", { runId, task: run.task, results: run.results, completedAt, source: "mcp" });
     mcpRuns.delete(runId);
     return res.json({ ok: true, results: run.results });
   } catch (err) {
@@ -344,9 +359,113 @@ app.post("/api/pipeline/mcp/error", (req, res) => {
   const { runId, error: errMsg } = req.body || {};
   if (!runId) return res.status(400).json({ error: "runId is required" });
 
-  broadcast("pipeline:error", { runId, error: errMsg || "Unknown error" });
+  broadcast("pipeline:error", { runId, error: errMsg || "Unknown error", source: "mcp" });
   mcpRuns.delete(runId);
   return res.json({ ok: true });
+});
+
+// ─── Browser Relay endpoints ──────────────────────────────────────────────────
+
+app.get("/api/browser/status", async (_req, res) => {
+  const data = await browserRelay.status();
+  return res.status(data.ok ? 200 : 503).json(data);
+});
+
+/**
+ * POST /api/browser/action
+ * body: { action: string, params?: object }
+ * Supported actions: navigate, getContent, getText, getUrl, getTitle,
+ *                    screenshot, click, type, scroll, evaluate
+ */
+app.post("/api/browser/action", async (req, res) => {
+  const { action, params } = req.body || {};
+  if (!action || typeof action !== "string") {
+    return res.status(400).json({ ok: false, error: "action (string) is required" });
+  }
+  const result = await browserRelay[action]
+    ? (async () => {
+        switch (action) {
+          case "navigate":   return browserRelay.navigate(params?.url);
+          case "getContent": return browserRelay.getContent();
+          case "getText":    return browserRelay.getText();
+          case "getUrl":     return browserRelay.getUrl();
+          case "getTitle":   return browserRelay.getTitle();
+          case "screenshot": return browserRelay.screenshot(params?.format, params?.quality);
+          case "click":      return browserRelay.click(params?.selector);
+          case "type":       return browserRelay.type(params?.text, params?.selector);
+          case "scroll":     return browserRelay.scroll(params?.x, params?.y, params?.selector);
+          case "evaluate":   return browserRelay.evaluate(params?.expression, params?.awaitPromise);
+          default:           return { ok: false, error: `Unknown action: ${action}` };
+        }
+      })()
+    : Promise.resolve({ ok: false, error: `Unknown action: ${action}` });
+  const data = await result;
+  return res.status(data.ok ? 200 : 400).json(data);
+});
+
+/**
+ * POST /api/browser/task
+ * body: { perintah: string, maxSteps?: number, simulateTime?: string }
+ * simulateTime: optional "HH:mm" or "H.mm" (e.g. "15:51") to simulate current time for ticket war.
+ */
+app.post("/api/browser/task", async (req, res) => {
+  const { perintah, maxSteps, simulateTime } = req.body || {};
+  if (!perintah || typeof perintah !== "string" || !perintah.trim()) {
+    return res.status(400).json({ ok: false, error: "perintah (non-empty string) is required" });
+  }
+  try {
+    const result = await runBrowserTask(perintah.trim(), { maxSteps, simulateTime });
+    return res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+/**
+ * POST /api/browser/cdp-task
+ * body: { perintah: string, maxSteps?: number, simulateTime?: string }
+ * Uses Playwright connectOverCDP → more robust selector / navigation handling.
+ */
+app.post("/api/browser/cdp-task", async (req, res) => {
+  const { perintah, maxSteps, simulateTime } = req.body || {};
+  if (!perintah || typeof perintah !== "string" || !perintah.trim()) {
+    return res.status(400).json({ ok: false, error: "perintah (non-empty string) is required" });
+  }
+
+  const relayPort = Number(process.env.RELAY_PORT) || 18792;
+  const relayHost = process.env.RELAY_HOST || "127.0.0.1";
+  const relayStatusUrl = `http://${relayHost}:${relayPort}/status`;
+
+  let relayOk = false;
+  try {
+    const r = await fetch(relayStatusUrl, { signal: AbortSignal.timeout(2000) });
+    relayOk = r.ok;
+  } catch (e) {
+    const msg = e?.message || String(e);
+    const isRefused = msg.includes("ECONNREFUSED") || msg.includes("fetch failed");
+    if (isRefused) {
+      return res.status(503).json({
+        ok: false,
+        error: "Browser relay not running. WebSocket connection refused. Start the relay in a separate terminal: npm run relay",
+        hint: "Then attach the extension to a tab (Attach This Tab) and try again.",
+      });
+    }
+  }
+  if (!relayOk) {
+    return res.status(503).json({
+      ok: false,
+      error: "Browser relay responded but status not ok. Ensure relay is running: npm run relay",
+    });
+  }
+
+  try {
+    const result = await runCdpTask(perintah.trim(), { maxSteps, simulateTime });
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    const msg = err?.message || String(err);
+    console.warn("[api] browser/cdp-task error:", msg);
+    return res.status(500).json({ ok: false, error: msg });
+  }
 });
 
 // ─── SSE stream endpoint ───────────────────────────────────────────────────
