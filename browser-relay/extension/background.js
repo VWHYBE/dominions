@@ -350,6 +350,8 @@ async function attachTab(tabId, opts = {}) {
     try { await chrome.debugger.detach({ tabId: attachedTabId }); } catch { /* already detached */ }
   }
   await chrome.debugger.attach({ tabId }, "1.3");
+  // Defer Page.enable to after first paint — reduces white flash when attaching (Chrome debugger quirk).
+  await new Promise((r) => setTimeout(r, 120));
   await chrome.debugger.sendCommand({ tabId }, "Page.enable");
   attachedTabId = tabId;
   await persistState();

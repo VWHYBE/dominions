@@ -5,11 +5,11 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/start.js",
+    "start:server": "node server.js",
     "start:all": "node scripts/start-with-relay.js",
     "dev": "nodemon server.js",
     "dev:relay": "nodemon browser-relay/server.js",
-    "dev:all": "node scripts/start-with-relay.js",
     "mcp": "node mcp-server.js",
     "relay": "node browser-relay/server.js",
     "check:ollama": "node scripts/check-ollama.js"

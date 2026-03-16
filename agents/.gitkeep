@@ -1,0 +1,4 @@
+# This folder is used by Dominions for per-agent long-term memory and skill knowledge.
+# - agents/<id>.memory.md — long-term memory for agent <id>
+# - agents/<id>/skills/<skill>.md — skill knowledge for agent <id>
+# Created on first pipeline run; subfolders are created on demand.

@@ -27,6 +27,14 @@ import {
 
 const API_URL = (process.env.DOMINIONS_API_URL || "http://localhost:3000").replace(/\/$/, "");
 
+// Optional: log to stderr if server unreachable (visible in Cursor MCP output)
+try {
+  const h = await fetch(API_URL + "/api/minions", { method: "GET" }).catch(() => null);
+  if (!h || !h.ok) {
+    process.stderr.write("[dominions MCP] Server not reachable at " + API_URL + ". Start with: npm run start:server\n");
+  }
+} catch (_) {}
+
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 
 async function api(method, path, body) {
@@ -66,6 +74,7 @@ const TOOLS = [
     description:
       "Run the Dominions agent pipeline using the MCP client's own AI (Cursor / VS Code) " +
       "instead of an external API. Returns the full pipeline context and minion system prompts. " +
+      "Requires the Dominions server to be running (e.g. npm start or node server.js on port 3000). " +
       "AFTER calling this tool you MUST: process each minion in order using its system prompt, " +
       "call `report_mcp_result` for every minion as you complete it (streams live to the Pipeline UI), " +
       "then call `finish_mcp_pipeline` when all minions are done.",
@@ -395,10 +404,27 @@ async function handleTool(name, args) {
         return err("task is required (non-empty string)");
       }
 
-      const minionsData = await api("GET", "/api/minions");
+      let minionsData;
+      try {
+        minionsData = await api("GET", "/api/minions");
+      } catch (e) {
+        const msg = e?.message ?? String(e);
+        const hint = msg.includes("ECONNREFUSED") || msg.includes("fetch failed")
+          ? " Pastikan server Dominions jalan (npm start atau node server.js), bukan hanya npm run relay."
+          : "";
+        return err("Tidak bisa hubung ke server Dominions: " + msg + hint);
+      }
+
       if (!minionsData.ok) return err(minionsData.error || "Failed to fetch minions");
-      const minions = minionsData.minions || [];
-      if (minions.length === 0) return err("No minions configured. Add minions first.");
+      const allMinions = minionsData.minions || [];
+      const minions = allMinions.filter((m) => m.active !== false);
+      if (minions.length === 0) {
+        return err(
+          allMinions.length === 0
+            ? "No minions configured. Add minions first (via list_minions / create_minion or Minions tab)."
+            : "No active minions. Enable at least one minion in the Minions tab (toggle active)."
+        );
+      }
 
       const runId = Date.now().toString(36);
       const total = minions.length;

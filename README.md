@@ -57,6 +57,12 @@ Web UI → Express API → Agent Manager → [Minion 1, Minion 2, …] (LLM: Ope
 
    Buka http://localhost:3000
 
+### Akses via jaringan
+
+Untuk membuka UI dari perangkat lain di jaringan (HP, PC lain): set `HOST=0.0.0.0` di `.env`, jalankan `npm start`. Console akan menampilkan **Network: http://\<IP\>:PORT** — buka URL itu di browser perangkat lain.
+
+Untuk memakai **MCP dari mesin lain** (mis. Cursor di PC lain): di config MCP set `DOMINIONS_API_URL=http://\<IP-mesin-yang-jalankan-server\>:3000` (ganti dengan IP yang muncul di log Network).
+
 ## Minion dinamis
 
 Minion didefinisikan di **minions/config.json** (atau lewat API):
@@ -104,3 +110,22 @@ File **memory.json**: key `shared` + satu key per minion id. Setiap entri: `role
 
 - Node.js >= 18
 - OPENROUTER_API_KEY (wajib)
+
+## MCP (Cursor)
+
+Tools Dominions (run_pipeline, run_pipeline_mcp, browser_task, dll.) dipakai lewat **MCP** di Cursor. Config di `~/.cursor/mcp.json`:
+
+```json
+"dominions": {
+  "command": "node",
+  "args": ["/absolute/path/to/dominions/mcp-server.js"],
+  "env": { "DOMINIONS_API_URL": "http://localhost:3000" }
+}
+```
+
+**Kalau MCP tidak jalan:**
+
+1. **Server harus jalan** — MCP memanggil API di `DOMINIONS_API_URL`. Jalankan dulu: `npm run start:server` atau `npm start`. Cek: buka http://localhost:3000.
+2. **Path `args` harus absolut** — ganti dengan path nyata ke folder dominions (mis. `/home/thaitea/Work/dominions`).
+3. **Lihat log MCP di Cursor** — Output → pilih "MCP" atau "dominions". Jika server belum jalan akan muncul: `[dominions MCP] Server not reachable at ...`
+4. **Restart MCP** — Cursor Settings → MCP → matikan/nyalakan "dominions", atau restart Cursor.

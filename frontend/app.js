@@ -5,6 +5,14 @@ const statusEl          = document.getElementById("status");
 const minionsGrid       = document.getElementById("minions-grid");
 const createMinionForm  = document.getElementById("create-minion-form");
 const createMinionStatus = document.getElementById("create-minion-status");
+const createNameInput   = document.getElementById("create-name");
+const createDescInput   = document.getElementById("create-description");
+const createPromptInput = document.getElementById("create-system-prompt");
+const createSubmitBtn   = document.getElementById("create-submit-btn");
+const createCancelEditBtn = document.getElementById("create-cancel-edit-btn");
+const createPanelTitle  = document.getElementById("create-panel-title");
+const createPanelHint   = document.getElementById("create-panel-hint");
+const createViewTitle   = document.getElementById("create-view-title");
 const taskInput         = document.getElementById("task-input");
 const runBtn            = document.getElementById("run-btn");
 const clearMemoryBtn    = document.getElementById("clear-memory-btn");
@@ -25,8 +33,30 @@ const pipelineTaskBanner   = document.getElementById("pipeline-task-banner");
 const pipelineTaskText     = document.getElementById("pipeline-task-text");
 const navPipelineDot       = document.getElementById("nav-pipeline-dot");
 
+// ─── Preview panel & sidebar toggles ───
+const taskSidebar          = document.getElementById("task-sidebar");
+const taskAgentsToggle     = document.getElementById("task-agents-toggle");
+const taskPreviewPanel     = document.getElementById("task-preview-panel");
+const taskPreviewToggle    = document.getElementById("task-preview-toggle");
+const taskPreviewPlaceholder = document.getElementById("task-preview-placeholder");
+const taskPreviewIframe    = document.getElementById("task-preview-iframe");
+const pipelinePreviewPanel = document.getElementById("pipeline-preview-panel");
+const pipelinePreviewToggle = document.getElementById("pipeline-preview-toggle");
+const pipelinePreviewPlaceholder = document.getElementById("pipeline-preview-placeholder");
+const pipelinePreviewIframe = document.getElementById("pipeline-preview-iframe");
+const pipelinePreviewPanelTitle = document.getElementById("pipeline-preview-panel-title");
+const pipelinePreviewDeviceWrap = document.getElementById("pipeline-preview-device-wrap");
+const pipelinePreviewDeviceImg = document.getElementById("pipeline-preview-device-img");
+const pipelinePreviewDeviceRefresh = document.getElementById("pipeline-preview-device-refresh");
+
 // ─── State ───
 const VIEW_IDS = ["minions-list", "create-minion", "task", "pipeline"];
+const STORAGE_AGENTS_VISIBLE = "dominions_task_agents_visible";
+const STORAGE_PREVIEW_VISIBLE = "dominions_preview_visible";
+let previewPollTimer = null;
+let deviceScreenshotPollTimer = null;
+let previewPanelMode = "browser"; // "browser" | "device"
+let editingMinionId = null;
 let minions = [];
 let selectedAgentId = null;
 let lastResults = null;
@@ -34,6 +64,7 @@ let lastResults = null;
 let currentRunId = null;
 let currentRunSource = null; // "task" | "mcp" — determines which view to update
 let agentStatuses = {}; // id -> "pending" | "running" | "done"
+let agentMemoryStats = {}; // id -> { entries: number }
 
 // ─── Clock ───
 function updateClock() {
@@ -127,6 +158,171 @@ function showView(viewId) {
     if (view) view.hidden = id !== viewId;
     if (link) link.classList.toggle("active", id === viewId);
   });
+  stopPreviewPoll();
+  if (viewId === "task" || viewId === "pipeline") {
+    if (viewId === "task") updateTaskPreview();
+    else applyPreviewPanelFromDeviceStatus();
+    startPreviewPoll();
+  }
+}
+
+// ─── Task sidebar: show/hide Active agents ───
+function getAgentsVisible() {
+  try {
+    const v = localStorage.getItem(STORAGE_AGENTS_VISIBLE);
+    return v === null || v === "true";
+  } catch { return true; }
+}
+
+function setAgentsVisible(visible) {
+  try { localStorage.setItem(STORAGE_AGENTS_VISIBLE, String(visible)); } catch {}
+}
+
+function applyAgentsVisiblePreference() {
+  if (!taskSidebar) return;
+  const visible = getAgentsVisible();
+  taskSidebar.classList.toggle("task-sidebar--agents-hidden", !visible);
+  if (taskAgentsToggle) {
+    taskAgentsToggle.setAttribute("aria-expanded", String(visible));
+    const chev = taskAgentsToggle.querySelector(".toggle-chevron");
+    if (chev) chev.textContent = visible ? "◀" : "▶";
+  }
+}
+
+// ─── Preview panel: show/hide (collapse right panel) ───
+function getPreviewVisible() {
+  try {
+    const v = localStorage.getItem(STORAGE_PREVIEW_VISIBLE);
+    return v === null || v === "true";
+  } catch { return true; }
+}
+
+function setPreviewVisible(visible) {
+  try { localStorage.setItem(STORAGE_PREVIEW_VISIBLE, String(visible)); } catch {}
+}
+
+function applyPreviewVisiblePreference() {
+  const visible = getPreviewVisible();
+  [taskPreviewPanel, pipelinePreviewPanel].forEach((panel) => {
+    if (!panel) return;
+    panel.classList.toggle("preview-panel--collapsed", !visible);
+  });
+  [taskPreviewToggle, pipelinePreviewToggle].forEach((btn) => {
+    if (!btn) return;
+    btn.setAttribute("aria-expanded", String(visible));
+    const chev = btn.querySelector(".toggle-chevron");
+    if (chev) chev.textContent = visible ? "▶" : "◀";
+  });
+}
+
+// ─── Browser preview: fetch current URL and set iframe ───
+async function updatePreview(placeholderEl, iframeEl) {
+  if (!placeholderEl || !iframeEl) return;
+  try {
+    const res = await fetch("/api/browser/current-url");
+    const data = await res.json();
+    if (data.ok && data.url && /^https?:\/\//i.test(data.url)) {
+      iframeEl.src = data.url;
+      iframeEl.hidden = false;
+      placeholderEl.hidden = true;
+    } else {
+      iframeEl.removeAttribute("src");
+      iframeEl.hidden = true;
+      placeholderEl.hidden = false;
+    }
+  } catch {
+    iframeEl.removeAttribute("src");
+    iframeEl.hidden = true;
+    placeholderEl.hidden = false;
+  }
+}
+
+function updateTaskPreview() {
+  updatePreview(taskPreviewPlaceholder, taskPreviewIframe);
+}
+
+function updatePipelinePreview() {
+  updatePreview(pipelinePreviewPlaceholder, pipelinePreviewIframe);
+}
+
+// ─── Device bridge (ADB): single panel shows BROWSER or DEVICES ─────────────
+
+async function getDeviceStatus() {
+  try {
+    const res = await fetch("/api/device/status");
+    const data = await res.json();
+    return { available: !!data.available, devices: data.devices || [] };
+  } catch {
+    return { available: false, devices: [] };
+  }
+}
+
+function stopDeviceScreenshotPoll() {
+  if (deviceScreenshotPollTimer) {
+    clearInterval(deviceScreenshotPollTimer);
+    deviceScreenshotPollTimer = null;
+  }
+}
+
+function refreshDeviceScreenshot() {
+  if (!pipelinePreviewDeviceImg) return;
+  pipelinePreviewDeviceImg.src = "/api/device/screenshot?t=" + Date.now();
+}
+
+function setPreviewPanelMode(mode) {
+  if (previewPanelMode === mode) return;
+  previewPanelMode = mode;
+  if (pipelinePreviewPanelTitle) {
+    pipelinePreviewPanelTitle.textContent = mode === "device" ? "DEVICES" : "BROWSER";
+  }
+  if (pipelinePreviewDeviceWrap) pipelinePreviewDeviceWrap.hidden = mode !== "device";
+  if (pipelinePreviewPlaceholder) pipelinePreviewPlaceholder.hidden = mode === "device";
+  if (pipelinePreviewIframe) {
+    pipelinePreviewIframe.hidden = mode === "device";
+    if (mode === "browser") pipelinePreviewIframe.removeAttribute("src");
+  }
+  if (mode === "device") {
+    refreshDeviceScreenshot();
+    stopDeviceScreenshotPoll();
+    const pipelineView = document.getElementById("view-pipeline");
+    if (pipelineView && !pipelineView.hidden) {
+      deviceScreenshotPollTimer = setInterval(refreshDeviceScreenshot, DEVICE_SCREENSHOT_POLL_MS);
+    }
+  } else {
+    stopDeviceScreenshotPoll();
+    updatePipelinePreview();
+  }
+}
+
+async function applyPreviewPanelFromDeviceStatus() {
+  const status = await getDeviceStatus();
+  if (status.available) {
+    setPreviewPanelMode("device");
+  } else {
+    setPreviewPanelMode("browser");
+  }
+}
+
+const PREVIEW_POLL_MS = 8000;
+const DEVICE_SCREENSHOT_POLL_MS = 2500;
+
+function startPreviewPoll() {
+  stopPreviewPoll();
+  const tick = () => {
+    const taskView = document.getElementById("view-task");
+    const pipelineView = document.getElementById("view-pipeline");
+    if (taskView && !taskView.hidden) updateTaskPreview();
+    else if (pipelineView && !pipelineView.hidden) applyPreviewPanelFromDeviceStatus();
+  };
+  previewPollTimer = setInterval(tick, PREVIEW_POLL_MS);
+}
+
+function stopPreviewPoll() {
+  if (previewPollTimer) {
+    clearInterval(previewPollTimer);
+    previewPollTimer = null;
+  }
+  stopDeviceScreenshotPoll();
 }
 
 // ─── Budget preset ───
@@ -237,10 +433,27 @@ async function loadMinions() {
         ? "AGENTS: " + minions.length + " TOTAL, " + activeList.length + " ACTIVE — " + activeList.map((m) => m.name.toUpperCase()).join(" → ") + " — PIPELINE READY"
         : "NO AGENTS CONFIGURED — NAVIGATE TO CREATE TAB TO DEPLOY AN AGENT"
     );
+    // Fetch memory stats for all agents (non-blocking)
+    fetchAllAgentMemoryStats();
   } catch (err) {
     setStatus("Could not load minions: " + err.message, true);
     minions = [];
   }
+}
+
+async function fetchAllAgentMemoryStats() {
+  const results = await Promise.allSettled(
+    minions.map(async (m) => {
+      const res = await fetch("/api/agents/" + encodeURIComponent(m.id) + "/memory");
+      const data = await res.json();
+      return { id: m.id, entries: data.entries || 0 };
+    })
+  );
+  results.forEach((r) => {
+    if (r.status === "fulfilled") agentMemoryStats[r.value.id] = { entries: r.value.entries };
+  });
+  renderMinionsGrid();
+  renderTaskAgentList();
 }
 
 // ─── Minions grid ───
@@ -287,6 +500,12 @@ function renderMinionsGrid() {
     const isActive = m.active !== false;
     const prompt = (m.systemPrompt || "").slice(0, 90);
     const truncated = (m.systemPrompt || "").length > 90;
+    const skills = Array.isArray(m.skills) ? m.skills : [];
+    const memStats = agentMemoryStats[m.id];
+    const memEntries = memStats ? memStats.entries : 0;
+    const skillBadges = skills.map((s) =>
+      "<span class=\"skill-badge\">" + escapeHtml(s) + "</span>"
+    ).join("");
     return (
       "<article class=\"minion-card" + (isActive ? "" : " minion-card--inactive") + "\" data-id=\"" + escapeHtml(m.id) + "\">" +
         "<div class=\"panel-header\">" +
@@ -307,8 +526,19 @@ function renderMinionsGrid() {
             ? "<div class=\"minion-stat\"><span class=\"stat-label\">DESC</span><span class=\"stat-value\">" + escapeHtml(m.description) + "</span></div>"
             : "") +
           "<p class=\"minion-prompt-preview\">" + escapeHtml(prompt) + (truncated ? "…" : "") + "</p>" +
+          (skills.length > 0
+            ? "<div class=\"minion-skills\"><span class=\"stat-label\">SKILLS</span><div class=\"skill-badges\">" + skillBadges + "</div></div>"
+            : "") +
+          "<div class=\"minion-memory-row\">" +
+            "<span class=\"stat-label\">MEMORY</span>" +
+            "<span class=\"memory-stat" + (memEntries > 0 ? " memory-stat--active" : "") + "\">" +
+              (memEntries > 0 ? "◉ " + memEntries + " ENTR" + (memEntries === 1 ? "Y" : "IES") : "◎ EMPTY") +
+            "</span>" +
+          "</div>" +
         "</div>" +
         "<div class=\"minion-card-footer\">" +
+          "<button type=\"button\" class=\"btn btn-small btn-edit\" data-id=\"" + escapeHtml(m.id) + "\" aria-label=\"Edit " + escapeHtml(m.name) + "\">◻ EDIT</button>" +
+          "<button type=\"button\" class=\"btn btn-small btn-clear-mem\" data-id=\"" + escapeHtml(m.id) + "\" aria-label=\"Clear memory for " + escapeHtml(m.name) + "\"" + (memEntries === 0 ? " disabled" : "") + ">◻ CLEAR MEM</button>" +
           "<button type=\"button\" class=\"btn btn-small btn-remove\" data-id=\"" + escapeHtml(m.id) + "\" aria-label=\"Remove " + escapeHtml(m.name) + "\">◻ REMOVE</button>" +
         "</div>" +
       "</article>"
@@ -318,9 +548,38 @@ function renderMinionsGrid() {
   minionsGrid.querySelectorAll(".btn-remove").forEach((btn) => {
     btn.addEventListener("click", handleRemoveMinion);
   });
+  minionsGrid.querySelectorAll(".btn-edit").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const id = e.currentTarget.getAttribute("data-id");
+      const m = minions.find((x) => x.id === id);
+      if (m) openEditForm(m);
+    });
+  });
   minionsGrid.querySelectorAll(".toggle-switch-input").forEach((input) => {
     input.addEventListener("change", handleToggleActive);
   });
+  minionsGrid.querySelectorAll(".btn-clear-mem").forEach((btn) => {
+    btn.addEventListener("click", handleClearAgentMemory);
+  });
+}
+
+async function handleClearAgentMemory(e) {
+  const id = e.currentTarget.getAttribute("data-id");
+  if (!id) return;
+  const m = minions.find((x) => x.id === id);
+  if (!m || !confirm("Clear memory for agent \"" + m.name + "\"?")) return;
+  e.currentTarget.disabled = true;
+  try {
+    const res = await fetch("/api/agents/" + encodeURIComponent(id) + "/memory", { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) { setStatus(data.error || "Failed", true); return; }
+    agentMemoryStats[id] = { entries: 0 };
+    setStatus("MEMORY CLEARED: " + m.name.toUpperCase());
+    renderMinionsGrid();
+    renderTaskAgentList();
+  } catch (err) {
+    setStatus("Error: " + err.message, true);
+  }
 }
 
 // ─── Remove minion ───
@@ -338,6 +597,34 @@ async function handleRemoveMinion(e) {
   }
 }
 
+// ─── Edit minion: open create form in edit mode ───
+function openEditForm(m) {
+  editingMinionId = m.id;
+  if (createNameInput) createNameInput.value = m.name || "";
+  if (createDescInput) createDescInput.value = m.description || "";
+  if (createPromptInput) createPromptInput.value = m.systemPrompt || "";
+  if (createPanelTitle) createPanelTitle.textContent = "EDIT AGENT";
+  if (createPanelHint) createPanelHint.textContent = "Update " + (m.name || m.id);
+  if (createSubmitBtn) createSubmitBtn.textContent = "▶ UPDATE AGENT";
+  if (createViewTitle) createViewTitle.textContent = "EDIT AGENT";
+  if (createCancelEditBtn) {
+    createCancelEditBtn.hidden = false;
+  }
+  setCreateStatus("");
+  showView("create-minion");
+}
+
+function resetCreateForm() {
+  editingMinionId = null;
+  if (createMinionForm) createMinionForm.reset();
+  if (createPanelTitle) createPanelTitle.textContent = "NEW AGENT CONFIGURATION";
+  if (createPanelHint) createPanelHint.textContent = "DEPLOY A NEW MINION TO THE PIPELINE";
+  if (createSubmitBtn) createSubmitBtn.textContent = "▶ DEPLOY AGENT";
+  if (createViewTitle) createViewTitle.textContent = "CREATE AGENT";
+  if (createCancelEditBtn) createCancelEditBtn.hidden = true;
+  setCreateStatus("");
+}
+
 // ─── Task agent list (only active agents run in pipeline) ───
 function renderTaskAgentList() {
   const activeMinions = getActiveMinions();
@@ -348,21 +635,46 @@ function renderTaskAgentList() {
   taskAgentList.innerHTML = activeMinions.map((m) => {
     const status = agentStatuses[m.id] || "idle";
     return (
-      "<button type=\"button\" class=\"task-agent-btn\" data-id=\"" + escapeHtml(m.id) + "\" role=\"listitem\">" +
-        "<span class=\"agent-btn-name\">" + escapeHtml(m.name.toUpperCase()) + "</span>" +
-        "<span class=\"agent-btn-status\" data-status=\"" + status + "\" data-id=\"" + escapeHtml(m.id) + "\"></span>" +
-      "</button>"
+      "<div class=\"task-agent-item\" data-id=\"" + escapeHtml(m.id) + "\">" +
+        "<div class=\"task-agent-row\">" +
+          "<button type=\"button\" class=\"task-agent-btn\" data-id=\"" + escapeHtml(m.id) + "\" role=\"listitem\">" +
+            "<span class=\"agent-btn-name\">" + escapeHtml(m.name.toUpperCase()) + "</span>" +
+            "<span class=\"agent-btn-status\" data-status=\"" + status + "\" data-id=\"" + escapeHtml(m.id) + "\"></span>" +
+          "</button>" +
+        "</div>" +
+        "<div class=\"task-agent-output\" aria-hidden=\"true\"></div>" +
+      "</div>"
     );
   }).join("");
 
   taskAgentList.querySelectorAll(".task-agent-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
       selectedAgentId = btn.getAttribute("data-id");
       taskAgentList.querySelectorAll(".task-agent-btn").forEach((b) => b.classList.remove("selected"));
       btn.classList.add("selected");
       const m = getActiveMinions().find((x) => x.id === selectedAgentId);
       if (resultPanelTitle) resultPanelTitle.textContent = m ? m.name.toUpperCase() + " — OUTPUT" : "OUTPUT STREAM";
       renderTaskResult();
+    });
+  });
+
+  taskAgentList.querySelectorAll(".task-agent-toggle").forEach((toggleBtn) => {
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const item = toggleBtn.closest(".task-agent-item");
+      if (!item) return;
+      const outputEl = item.querySelector(".task-agent-output");
+      const id = item.getAttribute("data-id");
+      const isExpanded = item.classList.toggle("task-agent-item--expanded");
+      toggleBtn.setAttribute("aria-label", isExpanded ? "Sembunyikan output" : "Tampilkan output");
+      toggleBtn.textContent = isExpanded ? "▼" : "▶";
+      if (outputEl && isExpanded && !outputEl.hasChildNodes() && lastResults && lastResults[id] != null) {
+        outputEl.innerHTML = renderMarkdown(String(lastResults[id]));
+        outputEl.setAttribute("aria-hidden", "false");
+      } else if (outputEl && !isExpanded) {
+        outputEl.setAttribute("aria-hidden", "true");
+      }
     });
   });
 }
@@ -396,6 +708,7 @@ function renderPipelineLanes() {
     return (
       "<div class=\"lane-card\" data-id=\"" + escapeHtml(m.id) + "\" data-status=\"" + status + "\">" +
         "<div class=\"lane-card-header\">" +
+          "<button type=\"button\" class=\"lane-card-toggle\" aria-label=\"Collapse output\" title=\"Expand/collapse\">▼</button>" +
           "<div class=\"lane-card-header-left\">" +
             "<span class=\"lane-icon\">⚡</span>" +
             "<span class=\"lane-name\">" + escapeHtml(m.name.toUpperCase()) + "</span>" +
@@ -417,6 +730,18 @@ function renderPipelineLanes() {
       "</div>"
     );
   }).join("");
+
+  pipelineLanes.querySelectorAll(".lane-card-toggle").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = btn.closest(".lane-card");
+      if (!card) return;
+      card.classList.toggle("lane-card--collapsed");
+      const collapsed = card.classList.contains("lane-card--collapsed");
+      btn.setAttribute("aria-label", collapsed ? "Expand output" : "Collapse output");
+      btn.textContent = collapsed ? "▶" : "▼";
+    });
+  });
 }
 
 function updatePipelineLaneStatus(id, status) {
@@ -453,6 +778,18 @@ function setPipelineGlobalStatus(status, text) {
 function setPipelineRunDot(active) {
   if (!navPipelineDot) return;
   navPipelineDot.classList.toggle("nav-run-dot--active", active);
+}
+
+function refreshExpandedTaskOutputs() {
+  if (!taskAgentList || !lastResults) return;
+  taskAgentList.querySelectorAll(".task-agent-item--expanded").forEach((item) => {
+    const id = item.getAttribute("data-id");
+    const outputEl = item.querySelector(".task-agent-output");
+    if (outputEl && id && lastResults[id] != null) {
+      outputEl.innerHTML = renderMarkdown(String(lastResults[id]));
+      outputEl.setAttribute("aria-hidden", "false");
+    }
+  });
 }
 
 function updateAgentStatus(id, status) {
@@ -626,10 +963,31 @@ async function handleClearMemory() {
 // ─── Create minion ───
 createMinionForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const name         = document.getElementById("create-name").value.trim();
-  const description  = document.getElementById("create-description").value.trim();
-  const systemPrompt = document.getElementById("create-system-prompt").value.trim();
+  const name         = (createNameInput && createNameInput.value.trim()) || "";
+  const description  = (createDescInput && createDescInput.value.trim()) || "";
+  const systemPrompt = (createPromptInput && createPromptInput.value.trim()) || "";
   if (!name || !systemPrompt) return;
+
+  if (editingMinionId) {
+    setCreateStatus("UPDATING AGENT...");
+    try {
+      const res = await fetch("/api/minions/" + encodeURIComponent(editingMinionId), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: description || undefined, systemPrompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setCreateStatus(data.error || "Update failed", true); return; }
+      setCreateStatus("AGENT UPDATED: " + name.toUpperCase());
+      resetCreateForm();
+      await loadMinions();
+      showView("minions-list");
+    } catch (err) {
+      setCreateStatus("ERROR: " + err.message, true);
+    }
+    return;
+  }
+
   const id = slugFromName(name) || "minion";
   setCreateStatus("DEPLOYING AGENT...");
   try {
@@ -648,12 +1006,21 @@ createMinionForm.addEventListener("submit", async (e) => {
   }
 });
 
+if (createCancelEditBtn) {
+  createCancelEditBtn.addEventListener("click", () => {
+    resetCreateForm();
+    showView("minions-list");
+  });
+}
+
 // ─── Nav ───
 document.querySelectorAll(".nav-link").forEach((link) => {
   link.addEventListener("click", (e) => {
     e.preventDefault();
     const viewId = link.getAttribute("data-view");
-    if (viewId) showView(viewId);
+    if (!viewId) return;
+    if (viewId === "create-minion") resetCreateForm();
+    showView(viewId);
   });
 });
 
@@ -661,6 +1028,24 @@ document.querySelectorAll(".nav-link").forEach((link) => {
 runBtn.addEventListener("click", handleRun);
 clearMemoryBtn.addEventListener("click", handleClearMemory);
 if (copyResultBtn) copyResultBtn.addEventListener("click", handleCopyResult);
+
+if (taskAgentsToggle) {
+  taskAgentsToggle.addEventListener("click", () => {
+    const next = !getAgentsVisible();
+    setAgentsVisible(next);
+    applyAgentsVisiblePreference();
+  });
+}
+
+function handlePreviewToggle(panelId) {
+  const next = !getPreviewVisible();
+  setPreviewVisible(next);
+  applyPreviewVisiblePreference();
+}
+
+if (taskPreviewToggle) taskPreviewToggle.addEventListener("click", () => handlePreviewToggle("task"));
+if (pipelinePreviewToggle) pipelinePreviewToggle.addEventListener("click", () => handlePreviewToggle("pipeline"));
+if (pipelinePreviewDeviceRefresh) pipelinePreviewDeviceRefresh.addEventListener("click", refreshDeviceScreenshot);
 
 taskInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -776,6 +1161,7 @@ function connectSSE() {
     updatePipelineLaneOutput(id, text);
     if (!lastResults) lastResults = {};
     lastResults[id] = text;
+    refreshExpandedTaskOutputs();
 
     const done = index + 1;
     setTicker("AGENT " + done + "/" + total + " DONE — " + name.toUpperCase() + " — " + (total - done) + " REMAINING");
@@ -796,11 +1182,17 @@ function connectSSE() {
   });
 
   es.addEventListener("pipeline:done", (e) => {
-    const { task, results, completedAt, source } = JSON.parse(e.data);
+    const { task, results, completedAt, source, previewUrl } = JSON.parse(e.data);
     lastResults = results || {};
     const count = Object.keys(lastResults).length;
     setPipelineGlobalStatus("done", "● DONE — " + count + " AGENT" + (count !== 1 ? "S" : ""));
     setPipelineRunDot(false);
+
+    if (previewUrl && pipelinePreviewIframe && pipelinePreviewPlaceholder && previewPanelMode === "browser") {
+      pipelinePreviewIframe.src = previewUrl + "?t=" + Date.now();
+      pipelinePreviewIframe.hidden = false;
+      pipelinePreviewPlaceholder.hidden = true;
+    }
 
     if (currentRunSource === "mcp") {
       const display = (s) => (s != null && String(s).trim() !== "" ? String(s) : "(No output)");
@@ -816,6 +1208,7 @@ function connectSSE() {
     }
 
     applyResultsToUI(lastResults);
+    refreshExpandedTaskOutputs();
     setStatus("PIPELINE COMPLETE — " + count + " AGENT" + (count !== 1 ? "S" : "") + " PROCESSED.");
     setTicker(
       "PIPELINE COMPLETE — " + count + " AGENTS — TASK: " +
@@ -827,9 +1220,7 @@ function connectSSE() {
     const activeList = getActiveMinions();
     if (!selectedAgentId && activeList.length > 0) {
       selectedAgentId = activeList[0].id;
-      const btn = taskAgentList.querySelector("[data-id=\"" + selectedAgentId + "\"]");
-      if (btn) btn.classList.add("selected");
-      taskAgentList.querySelectorAll(".task-agent-btn").forEach((b) => b.classList.remove("selected"));
+      const btn = taskAgentList.querySelector(".task-agent-btn[data-id=\"" + selectedAgentId + "\"]");
       if (btn) btn.classList.add("selected");
       const m = activeList[0];
       if (resultPanelTitle) resultPanelTitle.textContent = m.name.toUpperCase() + " — OUTPUT";
@@ -860,6 +1251,8 @@ function connectSSE() {
 
 // ─── Init ───
 showView("minions-list");
+applyAgentsVisiblePreference();
+applyPreviewVisiblePreference();
 loadConfig();
 loadMinions();
 connectSSE();

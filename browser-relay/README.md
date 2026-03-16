@@ -179,6 +179,7 @@ BROWSER_RELAY_URL=http://127.0.0.1:18792
 | Gejala | Solusi |
 |--------|--------|
 | Popup badge `!` | Relay belum jalan. Jalankan `npm run relay`. |
+| **Layar putih sekilas saat Attach** | Perilaku normal Chrome saat debugger attach; sudah dikurangi dengan menunda `Page.enable`. Kalau masih mengganggu, itu batasan browser. |
 | `Extension not connected` | Buka popup → klik **Attach This Tab**. |
 | Badge jadi "off" setelah navigasi | Tunggu 1–5 detik; extension akan re-attach otomatis. |
 | Tab tidak re-attach setelah reload | Klik **Attach This Tab** lagi; atau periksa apakah relay masih jalan. |

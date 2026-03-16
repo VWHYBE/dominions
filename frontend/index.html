@@ -71,15 +71,15 @@
       <div class="view-bar">
         <div class="view-bar-left">
           <span class="view-bar-icon">+</span>
-          <h2 class="view-bar-title">CREATE AGENT</h2>
+          <h2 class="view-bar-title" id="create-view-title">CREATE AGENT</h2>
         </div>
       </div>
       <div class="panel create-panel">
         <div class="panel-header">
-          <span class="panel-title">NEW AGENT CONFIGURATION</span>
-          <span class="panel-hint">DEPLOY A NEW MINION TO THE PIPELINE</span>
+          <span class="panel-title" id="create-panel-title">NEW AGENT CONFIGURATION</span>
+          <span class="panel-hint" id="create-panel-hint">DEPLOY A NEW MINION TO THE PIPELINE</span>
         </div>
-        <form id="create-minion-form" class="create-minion-form" aria-label="Create minion form">
+        <form id="create-minion-form" class="create-minion-form" aria-label="Create or edit minion form">
           <div class="form-row">
             <label for="create-name" class="form-label">AGENT NAME</label>
             <input type="text" id="create-name" class="form-input" placeholder="e.g. ANALYZER" required autocomplete="off" />
@@ -93,7 +93,8 @@
             <textarea id="create-system-prompt" class="form-input form-textarea" rows="6" placeholder="Define the agent's behavior, role, and responsibilities..." required></textarea>
           </div>
           <div class="form-actions">
-            <button type="submit" class="btn btn-primary">▶ DEPLOY AGENT</button>
+            <button type="submit" id="create-submit-btn" class="btn btn-primary">▶ DEPLOY AGENT</button>
+            <button type="button" id="create-cancel-edit-btn" class="btn btn-ghost" hidden aria-label="Cancel edit">CANCEL</button>
           </div>
         </form>
         <p id="create-minion-status" class="form-status" aria-live="polite"></p>
@@ -102,12 +103,15 @@
 
     <!-- ═══ TASK ═══ -->
     <section id="view-task" class="view view-task" hidden>
-      <div class="task-layout">
+      <div class="task-layout task-layout--no-preview">
 
-        <!-- Sidebar: agents -->
-        <aside class="task-sidebar">
+        <!-- Sidebar: agents (toggleable) -->
+        <aside class="task-sidebar" id="task-sidebar" aria-label="Active agents">
           <div class="panel-header sidebar-header">
             <span class="panel-title">ACTIVE AGENTS</span>
+            <button type="button" id="task-agents-toggle" class="btn btn-ghost btn-icon" aria-label="Show or hide active agents list" aria-expanded="true" title="Show/hide agents">
+              <span class="toggle-chevron" aria-hidden="true">◀</span>
+            </button>
             <span class="live-badge">● LIVE</span>
           </div>
           <div id="task-agent-list" class="task-agent-list" role="list"></div>
@@ -118,7 +122,7 @@
           </div>
         </aside>
 
-        <!-- Main: result + prompt -->
+        <!-- Main: result + prompt (no BROWSER panel here; preview only in PIPELINE tab) -->
         <div class="task-main">
 
           <div class="task-result-panel panel">
@@ -154,23 +158,45 @@
           </div>
 
         </div>
+
       </div>
     </section>
 
     <!-- ═══ PIPELINE LIVE ═══ -->
     <section id="view-pipeline" class="view" hidden>
-      <div class="view-bar">
-        <div class="view-bar-left">
-          <span class="view-bar-icon">◉</span>
-          <h2 class="view-bar-title">PIPELINE — LIVE VIEW</h2>
+      <div class="pipeline-layout">
+        <div class="pipeline-main">
+          <div class="view-bar">
+            <div class="view-bar-left">
+              <span class="view-bar-icon">◉</span>
+              <h2 class="view-bar-title">PIPELINE — LIVE VIEW</h2>
+            </div>
+            <span class="pipeline-global-status" id="pipeline-global-status" data-status="idle">● IDLE</span>
+          </div>
+          <div class="pipeline-task-banner" id="pipeline-task-banner" hidden>
+            <span class="pipeline-task-label">TASK</span>
+            <span class="pipeline-task-text" id="pipeline-task-text"></span>
+          </div>
+          <div id="pipeline-lanes" class="pipeline-lanes" aria-label="Agent pipeline lanes" aria-live="polite"></div>
         </div>
-        <span class="pipeline-global-status" id="pipeline-global-status" data-status="idle">● IDLE</span>
+        <!-- Right: Desktop/Browser preview -->
+        <aside class="preview-panel pipeline-preview-panel" id="pipeline-preview-panel" aria-label="Browser or device preview">
+          <div class="preview-panel-header">
+            <span class="panel-title" id="pipeline-preview-panel-title">BROWSER</span>
+            <button type="button" id="pipeline-preview-toggle" class="btn btn-ghost btn-icon" aria-label="Show or hide preview" aria-expanded="true" title="Show/hide preview">
+              <span class="toggle-chevron toggle-chevron--right" aria-hidden="true">▶</span>
+            </button>
+          </div>
+          <div class="preview-panel-body">
+            <p class="preview-placeholder" id="pipeline-preview-placeholder">Attach a tab (relay extension) and run a browser task to see the page here.</p>
+            <iframe id="pipeline-preview-iframe" class="preview-iframe" title="Browser preview" hidden></iframe>
+            <div id="pipeline-preview-device-wrap" class="preview-device-wrap" hidden>
+              <img id="pipeline-preview-device-img" class="preview-device-img" alt="Device screenshot" />
+              <button type="button" id="pipeline-preview-device-refresh" class="btn btn-ghost btn-small preview-device-refresh" aria-label="Refresh device screenshot">Refresh</button>
+            </div>
+          </div>
+        </aside>
       </div>
-      <div class="pipeline-task-banner" id="pipeline-task-banner" hidden>
-        <span class="pipeline-task-label">TASK</span>
-        <span class="pipeline-task-text" id="pipeline-task-text"></span>
-      </div>
-      <div id="pipeline-lanes" class="pipeline-lanes" aria-label="Agent pipeline lanes" aria-live="polite"></div>
     </section>
 
   </main>

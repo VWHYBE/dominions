@@ -3,6 +3,7 @@ import path from "path";
 import { getModuleDir } from "./utils/getModuleDir.js";
 import { EventEmitter } from "events";
 import * as memoryManager from "./memoryManager.js";
+import * as skillsManager from "./skillsManager.js";
 import * as minionRegistry from "./minions/index.js";
 import * as llm from "./llm.js";
 import { getConfig } from "./configManager.js";
@@ -113,12 +114,23 @@ export async function runPipeline(task) {
 
       await memoryManager.appendToRole(minion.id, `Input: ${contextForNext.slice(0, 300)}...`);
 
-      // contextForNext already accumulates all previous outputs — no need to repeat them.
+      // Long-term memory: inject past runs context for this agent
+      const ltm = await memoryManager.readAgentLongTermMemory(minion.id);
+      const memoryBlock = ltm.trim()
+        ? "\n\n[LONG-TERM MEMORY — past runs]\n" + ltm.trim() + "\n"
+        : "";
+
+      // Skill knowledge: inject accumulated expertise for this agent's skills
+      const skillKnowledge = await skillsManager.getSkillKnowledge(minion.id, minion.skills || []);
+      const skillsBlock = skillKnowledge
+        ? "\n\n[SKILL KNOWLEDGE]\n" + skillKnowledge + "\n"
+        : "";
+
       // Only append handoff block (inter-agent messages) which is separate metadata.
       const handoffBlock = handoff.messages.length > 0
         ? "\n\n[HANDOFF — pesan antar agent]\n" + JSON.stringify(handoff, null, 2) + "\n\n"
         : "";
-      const userContent = contextForNext + handoffBlock;
+      const userContent = contextForNext + handoffBlock + memoryBlock + skillsBlock;
 
       const output = await llm.complete(
         userContent,
@@ -136,6 +148,11 @@ export async function runPipeline(task) {
       }
 
       await memoryManager.appendToRole(minion.id, text);
+
+      // Persist long-term memory and update skill knowledge (non-fatal)
+      await memoryManager.appendAgentLongTermMemory(minion.id, { task, output: text }).catch(() => {});
+      await memoryManager.pruneAgentMemory(minion.id, 8).catch(() => {});
+      await skillsManager.updateSkillKnowledge(minion.id, minion.skills || [], text).catch(() => {});
 
       pipelineEvents.emit("agent:result", { runId, id: minion.id, name: minion.name, output: text, index, total });
     }

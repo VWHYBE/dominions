@@ -4,6 +4,39 @@ import { getModuleDir } from "./utils/getModuleDir.js";
 
 const __dirname = getModuleDir(import.meta.url);
 const MEMORY_PATH = path.join(__dirname, "memory.json");
+const AGENTS_DIR = path.join(__dirname, "agents");
+
+// ─── Long-term memory helpers ──────────────────────────────────────────────
+
+function agentMemoryPath(agentId) {
+  return path.join(AGENTS_DIR, `${agentId}.memory.md`);
+}
+
+const LTM_ENTRY_SEPARATOR = "\n---\n";
+
+/**
+ * Parse long-term memory file into an array of entry strings.
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function parseLtmEntries(raw) {
+  return raw
+    .split(LTM_ENTRY_SEPARATOR)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Serialize entry array back to file content.
+ * @param {string} agentId
+ * @param {string[]} entries
+ * @returns {string}
+ */
+function serializeLtm(agentId, entries) {
+  const header = `# ${agentId} — Long-term Memory\n`;
+  if (entries.length === 0) return header;
+  return header + entries.join(LTM_ENTRY_SEPARATOR) + LTM_ENTRY_SEPARATOR;
+}
 
 /**
  * @typedef {Object} MemoryEntry
@@ -102,6 +135,78 @@ export async function clearMemory(role = null) {
     for (const k of Object.keys(store)) store[k] = [];
   }
   await saveMemory(store);
+}
+
+// ─── Long-term memory (per-agent markdown files) ──────────────────────────
+
+/**
+ * Read an agent's long-term memory file.
+ * Returns the raw markdown content, or "" if not yet created.
+ * @param {string} agentId
+ * @returns {Promise<string>}
+ */
+export async function readAgentLongTermMemory(agentId) {
+  try {
+    return await fs.readFile(agentMemoryPath(agentId), "utf-8");
+  } catch (err) {
+    if (err.code === "ENOENT") return "";
+    throw err;
+  }
+}
+
+/**
+ * Append a new run entry to an agent's long-term memory file.
+ * @param {string} agentId
+ * @param {{ task: string; output: string; timestamp?: string }} entry
+ * @returns {Promise<void>}
+ */
+export async function appendAgentLongTermMemory(agentId, { task, output, timestamp }) {
+  await fs.mkdir(AGENTS_DIR, { recursive: true });
+  const ts = timestamp || new Date().toISOString().slice(0, 16).replace("T", " ");
+  const summary = String(output || "").slice(0, 500).replace(/\n+/g, " ").trim();
+  const newEntry = `## Run: ${ts} | Task: ${String(task).slice(0, 120)}\n**Summary:** ${summary}${output.length > 500 ? "…" : ""}`;
+
+  const existing = await readAgentLongTermMemory(agentId);
+  const entries = existing ? parseLtmEntries(existing.replace(/^# .*\n/, "")) : [];
+  entries.push(newEntry);
+
+  await fs.writeFile(agentMemoryPath(agentId), serializeLtm(agentId, entries), "utf-8");
+}
+
+/**
+ * Prune agent memory to keep only the most recent `maxEntries` entries.
+ * @param {string} agentId
+ * @param {number} [maxEntries=8]
+ * @returns {Promise<void>}
+ */
+export async function pruneAgentMemory(agentId, maxEntries = 8) {
+  const raw = await readAgentLongTermMemory(agentId);
+  if (!raw) return;
+  const entries = parseLtmEntries(raw.replace(/^# .*\n/, ""));
+  if (entries.length <= maxEntries) return;
+  const pruned = entries.slice(entries.length - maxEntries);
+  await fs.writeFile(agentMemoryPath(agentId), serializeLtm(agentId, pruned), "utf-8");
+}
+
+/**
+ * Clear an agent's long-term memory file (reset to empty).
+ * @param {string} agentId
+ * @returns {Promise<void>}
+ */
+export async function clearAgentMemory(agentId) {
+  await fs.mkdir(AGENTS_DIR, { recursive: true });
+  await fs.writeFile(agentMemoryPath(agentId), serializeLtm(agentId, []), "utf-8");
+}
+
+/**
+ * Get the number of entries in an agent's long-term memory.
+ * @param {string} agentId
+ * @returns {Promise<number>}
+ */
+export async function getAgentMemoryStats(agentId) {
+  const raw = await readAgentLongTermMemory(agentId);
+  if (!raw) return 0;
+  return parseLtmEntries(raw.replace(/^# .*\n/, "")).length;
 }
 
 export { MEMORY_PATH };

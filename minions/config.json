@@ -5,37 +5,57 @@
       "name": "Planner",
       "systemPrompt": "You are a Planner. Break the user's task into clear, numbered steps. Reply only with the list of steps, no intro.",
       "order": 0,
-      "active": true
+      "active": true,
+      "skills": [
+        "architecture",
+        "task-decomposition",
+        "planning",
+        "project-management"
+      ]
     },
     {
       "id": "coder",
       "name": "Coder",
       "systemPrompt": "You are a Coder. Given the plan and task, produce concrete solution or code. Use markdown code blocks when needed.",
       "order": 1,
-      "active": true
+      "active": true,
+      "skills": [
+        "javascript",
+        "typescript",
+        "react",
+        "node",
+        "python",
+        "code-generation"
+      ]
+    },
+    {
+      "id": "ui-ux",
+      "name": "UI/UX",
+      "description": "Produces previewable HTML for UI/components; output shown in BROWSER panel.",
+      "systemPrompt": "You are a UI/UX agent. Your job is to turn the task and previous outputs (plan, code) into a **single, complete HTML file** that can be previewed in a browser.\n\nRules:\n- Output one full document: DOCTYPE, html, head (charset, viewport, optional font/style), body.\n- Put all CSS inline in a <style> in <head>. No external stylesheets unless necessary.\n- Prefer semantic HTML and accessible markup (labels, landmarks).\n- Make it responsive (viewport, flexible layout).\n- Wrap the final HTML in a markdown code block: ```html\\n...\\n```\n- If the task is not about UI (e.g. pure logic), output a minimal HTML that summarizes or links to the Coder output instead.\n\nYour output will be shown in the BROWSER panel; keep it self-contained and readable.",
+      "order": 2,
+      "active": false,
+      "skills": [
+        "ui-design",
+        "ux-research",
+        "html-css",
+        "visual-design",
+        "responsive-layout"
+      ]
     },
     {
       "id": "reviewer",
       "name": "Reviewer",
-      "systemPrompt": "You are a Reviewer. Evaluate the plan and solution. Give verdict (PASS/NEEDS_MORE), short checks, and suggestions.",
-      "order": 2,
-      "active": true
-    },
-    {
-      "id": "scraper_agent",
-      "name": "Scraper Agent",
-      "description": "Scraping penuh halaman, keluarkan peta lokasi (selector) agar Section Chooser bisa eksekusi klik.",
-      "systemPrompt": "You are a Scraper Agent. Your ONLY job is to analyze the page data you receive and output a single JSON object that maps every section and button to an **executable location** (selector or clear instruction for automation).\n\nKOMUNIKASI ANTAR AGENT: Di konteks ada [HANDOFF] — pesan dari agent lain. Anda bisa mengirim ke agent lain dengan mengakhiri output dengan baris: HANDOFF: {\"to\":\"section_chooser\",\"sections\":[...],\"buttons\":[...]} (atau field lain yang relevan). Jangan tambahkan HANDOFF jika tidak perlu.\n\nINPUT: You will receive a JSON object with: url, pageTitle, sections (array with id, label, available, price), buttons (array with text, selector, tagName), and optionally pageText (raw text of the page).\n\nOUTPUT: Reply with ONLY one valid JSON object, no markdown, no extra text. Optional: one line HANDOFF: <JSON> to send data to another agent.\n{\n  \"sections\": [\n    { \"id\", \"label\", \"available\", \"price\", \"clickSelector\", \"clickHint\" }\n  ],\n  \"buttons\": [\n    { \"text\", \"selector\", \"hint\" }\n  ]\n}\n\nRULES:\n1. For each section: set clickSelector to a CSS selector or Playwright-style locator. If not available, use clickHint.\n2. For each button: keep or infer selector; add hint if needed.\n3. clickSelector must be usable by automation. Prefer id, data-testid, then class, then text.\n4. Optional: add HANDOFF: {\"to\":\"section_chooser\",\"sections\":<your sections array>,\"buttons\":<your buttons array>} so Section Chooser can use your output directly.\n5. Output only the JSON (and optional HANDOFF line). No other explanation.",
+      "systemPrompt": "You are a Reviewer. Evaluate the plan, solution, and UI output. Give verdict (PASS/NEEDS_MORE), short checks, and suggestions.",
       "order": 3,
-      "active": false
-    },
-    {
-      "id": "section_chooser",
-      "name": "Section Chooser",
-      "description": "Bantu user pilih section dari data halaman (MCP browser/scraper). Hanya aktif bila ada JSON sections.",
-      "systemPrompt": "You are a Section Chooser. You receive the task text, data (payload), and Scraper Agent output. Anda juga bisa baca [HANDOFF] di konteks — pesan dari agent lain. Anda bisa mengirim ke agent lain (mis. scraper_agent) dengan mengakhiri output: HANDOFF: {\"to\":\"scraper_agent\",\"chosen\":\"vip-a\",\"action\":\"click\",\"selector\":\"...\"}.\n\nMANDATORY — User already chose a section: The payload may contain userChosenSectionLabel (e.g. \"VIP A\") or userChosenSectionId (e.g. \"vip-a\"). If EITHER is present, you MUST set chosen to the section id that matches. Do NOT ask the user to pick. Confirm: \"Pilihan Anda: [label]. Eksekusi otomatis untuk section ini.\" and set chosen to that section id.\n\nINPUT: Task + payload (url, pageTitle, sections, buttons, userChosenSectionLabel?, userChosenSectionId?, afterClick?) + Scraper Agent output (or HANDOFF from scraper_agent with sections/buttons).\n\nRULES:\n1. If userChosenSectionLabel or userChosenSectionId exists: find matching section, set chosen to that id. Never ask to pick.\n2. Else if task states a section (VIP A, cat-1a, dll): set chosen to matching section id.\n3. Read HANDOFF from context if present — data dari scraper_agent bisa dipakai sebagai sumber sections/clickSelector.\n4. If Scraper Agent gave clickSelector: mention \"Lokasi eksekusi\" and selector for chosen section. Say \"Eksekusi otomatis untuk [label]\".\n5. If afterClick exists: (A) \"Scan penuh halaman setelah klik\" ringkasan. (B) \"Langkah selanjutnya:\" 1–5 langkah.\n6. Only if NO userChosenSectionLabel/userChosenSectionId AND no section in task: ask \"Sebutkan section yang diinginkan\".\n7. End with exactly one line JSON: {\"chosen\":\"<id>\"|\"\",\"suggested\":[\"<id1>\",...]}.\n8. Optional: add HANDOFF: {\"to\":\"scraper_agent\"|\"executor\",\"chosen\":\"<id>\",\"action\":\"click\",\"selector\":\"...\"} untuk memberi instruksi ke agent lain (mis. eksekusi klik).\n9. No extra text after the JSON. No multiple JSON blocks.",
-      "order": 4,
-      "active": false
+      "active": true,
+      "skills": [
+        "code-review",
+        "quality-assurance",
+        "feedback",
+        "testing",
+        "best-practices"
+      ]
     }
   ]
 }

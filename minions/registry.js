@@ -14,6 +14,7 @@ export const CONFIG_PATH = path.join(__dirname, "config.json");
  * @property {number} order
  * @property {string} [model]
  * @property {boolean} [active] — if false, agent is excluded from pipeline runs (default true)
+ * @property {string[]} [skills] — capability tags; used for skill knowledge accumulation
  */
 
 /**
@@ -89,6 +90,7 @@ export async function addMinion(input) {
     active: input.active !== false,
     ...(input.description !== undefined && input.description !== "" && { description: input.description }),
     ...(input.model && { model: input.model }),
+    ...(Array.isArray(input.skills) && input.skills.length > 0 && { skills: input.skills }),
   };
   config.minions.push(entry);
   await saveConfig(config);
@@ -113,6 +115,7 @@ export async function updateMinion(id, updates) {
     ...(updates.order !== undefined && { order: updates.order }),
     ...(updates.model !== undefined && { model: updates.model }),
     ...(updates.active !== undefined && { active: Boolean(updates.active) }),
+    ...(updates.skills !== undefined && { skills: Array.isArray(updates.skills) ? updates.skills : [] }),
   };
   await saveConfig(config);
   return config.minions[idx];

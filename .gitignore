@@ -5,3 +5,4 @@ node_modules/
 .cursor/mcp.json
 /examples
 .cursor/
+result/
