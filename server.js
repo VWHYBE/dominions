@@ -39,6 +39,7 @@ import * as browserRelay from "./services/browserRelayClient.js";
 import { runTask as runBrowserTask } from "./services/browserTaskRunner.js";
 import { runCdpTask } from "./services/browserCdpRunner.js";
 import * as deviceBridge from "./services/deviceBridge.js";
+import * as mobileWebRunner from "./services/mobileWebRunner.js";
 
 // ─── SSE client registry ───────────────────────────────────────────────────
 const sseClients = new Set();
@@ -676,6 +677,34 @@ app.post("/api/pipeline/mcp/start", (req, res) => {
   return res.json({ ok: true });
 });
 
+/** Signal that a specific MCP agent has started processing. */
+app.post("/api/pipeline/mcp/agent-start", (req, res) => {
+  const { runId, id, name, index, total } = req.body || {};
+  if (!runId || !id) return res.status(400).json({ error: "runId and id are required" });
+  const run = mcpRuns.get(runId);
+  if (!run) return res.status(404).json({ error: "Run not found: " + runId });
+  broadcast("agent:start", {
+    runId, id, name: name || id,
+    index: index ?? 0, total: total ?? run.total, source: "mcp",
+  });
+  return res.json({ ok: true });
+});
+
+/** Stream a partial text chunk for a running MCP agent — broadcasts agent:chunk SSE. */
+app.post("/api/pipeline/mcp/chunk", (req, res) => {
+  const { runId, id, name, chunk, index, total } = req.body || {};
+  if (!runId || !id || chunk === undefined) {
+    return res.status(400).json({ error: "runId, id, and chunk are required" });
+  }
+  const run = mcpRuns.get(runId);
+  if (!run) return res.status(404).json({ error: "Run not found: " + runId });
+  broadcast("agent:chunk", {
+    runId, id, name: name || id, chunk: String(chunk),
+    index: index ?? 0, total: total ?? run.total, source: "mcp",
+  });
+  return res.json({ ok: true });
+});
+
 app.post("/api/pipeline/mcp/result", (req, res) => {
   const { runId, id, name, output, index, total } = req.body || {};
   if (!runId || !id) {
@@ -876,6 +905,8 @@ app.get("/api/device/screenshot", async (req, res) => {
       return res.status(result.error === "No devices" ? 404 : 503).json({ ok: false, error: result.error });
     }
     res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     return res.send(result.buffer);
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) });
@@ -976,6 +1007,53 @@ app.post("/api/browser/cdp-task", async (req, res) => {
     const msg = err?.message || String(err);
     console.warn("[api] browser/cdp-task error:", msg);
     return res.status(500).json({ ok: false, error: msg });
+  }
+});
+
+// ─── MobAI mobile web automation endpoints ────────────────────────────────
+
+/** GET /api/mobai/devices — list Android devices connected via ADB. */
+app.get("/api/mobai/devices", async (_req, res) => {
+  try {
+    const result = await mobileWebRunner.listDevices();
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+/**
+ * POST /api/mobai/execute
+ * body: { deviceId: string, script: { version: string, steps: object[] } }
+ * Executes a DSL script on the Android device via ADB + Playwright CDP.
+ */
+app.post("/api/mobai/execute", async (req, res) => {
+  const { deviceId, script } = req.body || {};
+  if (!deviceId || typeof deviceId !== "string") {
+    return res.status(400).json({ ok: false, error: "deviceId (non-empty string) is required" });
+  }
+  if (!script || !Array.isArray(script.steps)) {
+    return res.status(400).json({ ok: false, error: "script.steps (array) is required" });
+  }
+  try {
+    const result = await mobileWebRunner.executeDsl(deviceId, script);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+/**
+ * GET /api/mobai/screenshot/:deviceId — capture screenshot from Android device via ADB.
+ */
+app.get("/api/mobai/screenshot/:deviceId", async (req, res) => {
+  const { deviceId } = req.params;
+  try {
+    const result = await mobileWebRunner.captureScreenshot(deviceId);
+    if (!result.ok) return res.status(503).json(result);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) });
   }
 });
 

@@ -161,7 +161,7 @@ function showView(viewId) {
   stopPreviewPoll();
   if (viewId === "task" || viewId === "pipeline") {
     if (viewId === "task") updateTaskPreview();
-    else applyPreviewPanelFromDeviceStatus();
+    else applyPreviewPanelFromDeviceStatus({ force: true });
     startPreviewPoll();
   }
 }
@@ -264,13 +264,23 @@ function stopDeviceScreenshotPoll() {
   }
 }
 
-function refreshDeviceScreenshot() {
+async function refreshDeviceScreenshot() {
   if (!pipelinePreviewDeviceImg) return;
-  pipelinePreviewDeviceImg.src = "/api/device/screenshot?t=" + Date.now();
+  const url = "/api/device/screenshot?t=" + Date.now();
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    const blob = await res.blob();
+    const prev = pipelinePreviewDeviceImg.src;
+    pipelinePreviewDeviceImg.src = URL.createObjectURL(blob);
+    if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+  } catch {
+    pipelinePreviewDeviceImg.src = url;
+  }
 }
 
-function setPreviewPanelMode(mode) {
-  if (previewPanelMode === mode) return;
+function setPreviewPanelMode(mode, { force = false } = {}) {
+  if (previewPanelMode === mode && !force) return;
   previewPanelMode = mode;
   if (pipelinePreviewPanelTitle) {
     pipelinePreviewPanelTitle.textContent = mode === "device" ? "DEVICES" : "BROWSER";
@@ -282,24 +292,22 @@ function setPreviewPanelMode(mode) {
     if (mode === "browser") pipelinePreviewIframe.removeAttribute("src");
   }
   if (mode === "device") {
-    refreshDeviceScreenshot();
+    // Always restart polling so the interval is fresh
     stopDeviceScreenshotPoll();
-    const pipelineView = document.getElementById("view-pipeline");
-    if (pipelineView && !pipelineView.hidden) {
-      deviceScreenshotPollTimer = setInterval(refreshDeviceScreenshot, DEVICE_SCREENSHOT_POLL_MS);
-    }
+    refreshDeviceScreenshot();
+    deviceScreenshotPollTimer = setInterval(refreshDeviceScreenshot, DEVICE_SCREENSHOT_POLL_MS);
   } else {
     stopDeviceScreenshotPoll();
     updatePipelinePreview();
   }
 }
 
-async function applyPreviewPanelFromDeviceStatus() {
+async function applyPreviewPanelFromDeviceStatus({ force = false } = {}) {
   const status = await getDeviceStatus();
   if (status.available) {
-    setPreviewPanelMode("device");
+    setPreviewPanelMode("device", { force });
   } else {
-    setPreviewPanelMode("browser");
+    setPreviewPanelMode("browser", { force });
   }
 }
 
@@ -769,6 +777,27 @@ function updatePipelineLaneOutput(id, output) {
   }
 }
 
+/**
+ * Render partial streamed text into a lane while it is still being received.
+ * Uses a plain <pre> so markdown is not re-parsed on every chunk (performance).
+ * The final `updatePipelineLaneOutput` call replaces it with rendered markdown.
+ */
+function updatePipelineLaneStreamText(id, text) {
+  if (!pipelineLanes) return;
+  const outputEl = pipelineLanes.querySelector("#lane-output-" + id);
+  if (!outputEl) return;
+  let pre = outputEl.querySelector(".lane-stream-pre");
+  if (!pre) {
+    outputEl.innerHTML = "";
+    pre = document.createElement("pre");
+    pre.className = "lane-stream-pre";
+    outputEl.appendChild(pre);
+  }
+  pre.textContent = text;
+  // Auto-scroll to bottom of the lane as text arrives
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
 function setPipelineGlobalStatus(status, text) {
   if (!pipelineGlobalStatus) return;
   pipelineGlobalStatus.setAttribute("data-status", status);
@@ -1102,6 +1131,8 @@ function connectSSE() {
       renderPipelineLanes();
       showView("pipeline");
       setTicker("PIPELINE (MCP) — TASK: " + task.slice(0, 80) + (task.length > 80 ? "…" : ""));
+      // Activate device panel and force-start live screenshot polling
+      applyPreviewPanelFromDeviceStatus({ force: true });
       return;
     }
 
@@ -1153,9 +1184,25 @@ function connectSSE() {
     }
   });
 
+  // Accumulates streamed chunks per agent id during an MCP run
+  const streamBuffers = {};
+
+  es.addEventListener("agent:chunk", (e) => {
+    const { id, name, chunk, index, total } = JSON.parse(e.data);
+    if (!streamBuffers[id]) streamBuffers[id] = "";
+    streamBuffers[id] += chunk;
+    updatePipelineLaneStreamText(id, streamBuffers[id]);
+    setTicker(
+      "STREAMING " + (index + 1) + "/" + total + " — " + name.toUpperCase() +
+      " — " + streamBuffers[id].length + " chars…"
+    );
+  });
+
   es.addEventListener("agent:result", (e) => {
     const { id, name, output, index, total } = JSON.parse(e.data);
     const text = (output != null && String(output).trim() !== "") ? String(output) : "(No output)";
+    // Clear stream buffer for this agent — final render replaces it
+    delete streamBuffers[id];
     updateAgentStatus(id, "done");
     updatePipelineLaneStatus(id, "done");
     updatePipelineLaneOutput(id, text);
@@ -1166,7 +1213,11 @@ function connectSSE() {
     const done = index + 1;
     setTicker("AGENT " + done + "/" + total + " DONE — " + name.toUpperCase() + " — " + (total - done) + " REMAINING");
 
-    if (currentRunSource === "mcp") return;
+    if (currentRunSource === "mcp") {
+      // Immediately refresh device screenshot so panel shows latest state after each agent
+      if (previewPanelMode === "device") refreshDeviceScreenshot();
+      return;
+    }
 
     if (selectedAgentId === id || !selectedAgentId) {
       selectedAgentId = id;
@@ -1203,6 +1254,8 @@ function connectSSE() {
         "PIPELINE (MCP) COMPLETE — " + count + " AGENTS — " +
         task.slice(0, 70) + (task.length > 70 ? "…" : "")
       );
+      // Final screenshot refresh after pipeline completes
+      if (previewPanelMode === "device") refreshDeviceScreenshot();
       currentRunSource = null;
       return;
     }

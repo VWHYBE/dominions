@@ -1814,6 +1814,29 @@ body {
   line-height: 1.8;
 }
 
+.lane-stream-pre {
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text2);
+  line-height: 1.65;
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  opacity: 0.85;
+}
+
+.lane-stream-pre::after {
+  content: "▌";
+  animation: blink-cursor 0.7s step-end infinite;
+  color: var(--accent, #7c3aed);
+  font-size: 0.85em;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
 .lane-pre {
   font-size: 0.8125rem;
   white-space: pre-wrap;

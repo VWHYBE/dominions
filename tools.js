@@ -1,5 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
+import * as mobileWebRunner from "./services/mobileWebRunner.js";
+import * as deviceBridge from "./services/deviceBridge.js";
 
 /**
  * Local tools callable by minions (no external services).
@@ -81,6 +83,34 @@ export const tools = {
   list_folder: async (args) => {
     const { path: dirPath = ".", basePath } = args || {};
     return listDir(dirPath, basePath);
+  },
+
+  mobai_list_devices: async () => {
+    try {
+      const result = await deviceBridge.status();
+      return result;
+    } catch (err) {
+      return { ok: false, error: err.message ?? String(err) };
+    }
+  },
+
+  mobai_execute_dsl: async (args) => {
+    const { deviceId, script } = args ?? {};
+    if (!deviceId || typeof deviceId !== "string") {
+      return { ok: false, error: "deviceId (non-empty string) is required" };
+    }
+    if (!script || !Array.isArray(script.steps)) {
+      return { ok: false, error: "script.steps (array) is required" };
+    }
+    return mobileWebRunner.executeDsl(deviceId, script);
+  },
+
+  mobai_screenshot: async (args) => {
+    const { deviceId } = args ?? {};
+    if (!deviceId || typeof deviceId !== "string") {
+      return { ok: false, error: "deviceId (non-empty string) is required" };
+    }
+    return mobileWebRunner.captureScreenshot(deviceId);
   },
 };
 

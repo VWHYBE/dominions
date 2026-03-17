@@ -470,18 +470,33 @@ async function handleTool(name, args) {
         return err("runId, minionId, and output are required");
       }
 
+      const text     = String(output);
+      const id       = minionId;
+      const name     = minionName || minionId;
+      const idx      = index ?? 0;
+      const tot      = total ?? 1;
+
+      // Signal agent start so the lane switches to "running" state immediately
+      await api("POST", "/api/pipeline/mcp/agent-start", { runId, id, name, index: idx, total: tot });
+
+      // Stream output word-by-word so the Pipeline UI shows live progress
+      const CHUNK_SIZE = 6; // words per chunk
+      const words = text.split(" ");
+      for (let i = 0; i < words.length; i += CHUNK_SIZE) {
+        const chunk = words.slice(i, i + CHUNK_SIZE).join(" ") + (i + CHUNK_SIZE < words.length ? " " : "");
+        await api("POST", "/api/pipeline/mcp/chunk", { runId, id, name, chunk, index: idx, total: tot });
+        // Small yield so Node.js can flush SSE writes between chunks
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      // Finalize with the complete output
       const data = await api("POST", "/api/pipeline/mcp/result", {
-        runId,
-        id: minionId,
-        name: minionName || minionId,
-        output: String(output),
-        index: index ?? 0,
-        total: total ?? 1,
+        runId, id, name, output: text, index: idx, total: tot,
       });
 
       if (!data.ok) return err(data.error || "Failed to report result");
       return ok(
-        "Streamed result for [" + minionId + "] (step " + ((index ?? 0) + 1) + "/" + (total ?? 1) + ")"
+        "Streamed result for [" + id + "] (step " + (idx + 1) + "/" + tot + ")"
       );
     }
 
